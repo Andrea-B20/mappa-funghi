@@ -1128,7 +1128,16 @@ window.hideRainTip = function () {
 function onMapClick(e) {
   const { lat, lng } = e.latlng;
   openSpeciesIdx = null;
-  const popup = L.popup({ className: "wx-leaflet-popup", maxWidth: 320, minWidth: 280 })
+  const popup = L.popup({
+    className: "wx-leaflet-popup",
+    maxWidth: 320,
+    minWidth: 280,
+    // margine di rispetto da header (in alto) e legenda (in basso, dove
+    // su mobile occupa tutta la larghezza): altrimenti l'auto-pan di
+    // Leaflet può posizionare il popup proprio dietro a questi elementi
+    autoPanPaddingTopLeft: L.point(16, 120),
+    autoPanPaddingBottomRight: L.point(16, 110),
+  })
     .setLatLng(e.latlng)
     .setContent(popupSkeleton(lat, lng))
     .openOn(map);
