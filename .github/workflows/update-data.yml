@@ -1,0 +1,69 @@
+name: Aggiorna dati
+
+on:
+  schedule:
+    # meteo (pioggia, umidità, quota): ogni giorno alle 05:00 UTC — dopo
+    # la mezzanotte in Italia, quando i dati del giorno precedente sono
+    # ormai definitivi e pronti prima che qualcuno pianifichi l'uscita
+    - cron: "0 5 * * *"
+    # storico ritrovamenti (GBIF + iNaturalist): ogni lunedì alle 04:00 UTC
+    # — le nuove osservazioni citizen-science arrivano lentamente, un
+    # aggiornamento giornaliero sarebbe solo carico inutile sulle API
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Dataset da aggiornare manualmente"
+        required: true
+        default: "entrambi"
+        type: choice
+        options:
+          - meteo
+          - storico
+          - entrambi
+
+permissions:
+  contents: write
+
+jobs:
+  update-weather:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.dataset == 'meteo' || github.event.inputs.dataset == 'entrambi')) ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python scripts/fetch_weather_grid.py
+      - name: Commit se i dati sono cambiati
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add web/data/weather_grid.geojson
+          git diff --cached --quiet || git commit -m "Aggiorna dati meteo (automatico)"
+          git push
+
+  update-occurrences:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.dataset == 'storico' || github.event.inputs.dataset == 'entrambi')) ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python scripts/fetch_occurrences.py
+      - name: Commit se i dati sono cambiati
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add web/data/occurrences.geojson
+          git diff --cached --quiet || git commit -m "Aggiorna dati storici GBIF/iNaturalist (automatico)"
+          git push

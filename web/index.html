@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mappa Funghi - Zone di calore</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Domine:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.5 11.5C3.5 6.8 7.3 3 12 3s8.5 3.8 8.5 8.5" />
+        <path d="M3.5 11.5c0 1 .8 1.8 1.8 1.8h13.4c1 0 1.8-.8 1.8-1.8" />
+        <path d="M9.5 13v5.5a2.5 2.5 0 0 0 5 0V13" />
+      </svg>
+      <h1>Mappa Funghi</h1>
+    </div>
+
+    <div class="toolbar">
+      <div class="mode-switch" id="modeSwitch"></div>
+      <div class="species-filters" id="filters"></div>
+    </div>
+
+    <div class="status" id="countBadge"></div>
+  </header>
+
+  <main>
+    <div id="map"></div>
+
+    <div class="legend">
+      <h2 id="legendTitle">Densità storica ritrovamenti</h2>
+      <div class="bar"></div>
+      <div class="labels"><span>bassa</span><span>alta</span></div>
+      <p id="legendDesc"></p>
+    </div>
+  </main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
