@@ -60,10 +60,14 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
       - run: python scripts/fetch_occurrences.py
+      # vegetazione/quota reali per le celle con ritrovamenti: dipende dal
+      # file appena scritto sopra, va rilanciato ogni volta che i
+      # ritrovamenti cambiano così le celle nuove hanno subito il loro dato
+      - run: python scripts/fetch_vegetation_fine.py
       - name: Commit se i dati sono cambiati
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/data/occurrences.geojson
-          git diff --cached --quiet || git commit -m "Aggiorna dati storici GBIF/iNaturalist (automatico)"
+          git add web/data/occurrences.geojson web/data/vegetation_fine.geojson
+          git diff --cached --quiet || git commit -m "Aggiorna dati storici GBIF/iNaturalist e vegetazione (automatico)"
           git push

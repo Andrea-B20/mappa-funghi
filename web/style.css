@@ -176,28 +176,37 @@ input:focus-visible {
   color: var(--accent-ink);
 }
 
-/* species filter chips */
+/* barra dei filtri specie: una sezione propria, larga quanto la pagina e
+   con lo stesso respiro orizzontale dell'header sopra — non una fila di
+   chip nudi lasciati cadere sul canvas della mappa. Su schermi stretti
+   questa stessa regola viene sovrascritta per trasformarla nel foglio a
+   comparsa dal basso, vedi sezione Responsive in fondo al file */
 .species-filters {
   display: flex;
-  gap: var(--sp-2);
+  align-items: center;
+  gap: var(--sp-3);
   flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding: 6px 12px 6px 8px;
+  gap: 10px;
+  padding: 9px 18px 9px 12px;
   background: var(--canvas);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-muted);
+  cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
-.chip:hover { border-color: var(--border-strong); }
+.chip:hover { border-color: var(--border-strong); color: var(--text); }
 
 .chip input {
   position: absolute;
@@ -207,11 +216,12 @@ input:focus-visible {
 }
 
 .chip .dot {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex: none;
   box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+  transition: box-shadow 0.15s ease;
 }
 
 .chip.active {
@@ -219,6 +229,126 @@ input:focus-visible {
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
+.chip.active .dot { box-shadow: 0 0 0 3px rgba(255,255,255,0.14); }
+
+/* pulsante "Specie" che apre il menu a comparsa dei filtri: nascosto su
+   desktop (dove la barra dei filtri resta sempre visibile sotto l'header),
+   mostrato solo sotto il breakpoint mobile — vedi sezione Responsive in
+   fondo al file */
+.filters-toggle {
+  display: none;
+  align-items: center;
+  gap: 6px;
+}
+.filters-toggle svg { width: 15px; height: 15px; flex: none; }
+
+.filters-toggle-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.filters-scrim { display: none; }
+
+/* barra di ricerca località: sul desktop un campo sempre visibile spinto
+   in fondo alla toolbar (margin-left:auto), su mobile un pulsante a icona
+   che si espande sul posto nella stessa riga di mode-switch/filtri —
+   vedi sezione Responsive in fondo al file */
+.location-search {
+  position: relative;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.location-search-toggle {
+  display: none;
+}
+
+.location-search-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 220px;
+  padding: 0 var(--sp-2) 0 10px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: border-color 0.15s ease;
+}
+.location-search-form:focus-within { border-color: var(--border-strong); }
+
+.location-search-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--text-faint);
+}
+
+.location-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.location-search-input::placeholder { color: var(--text-faint); }
+.location-search-input:focus { outline: none; }
+
+.location-search-clear {
+  display: none;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-faint);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.location-search-clear svg { width: 13px; height: 13px; }
+.location-search-clear:hover { color: var(--text); background: var(--surface-2); }
+.location-search-form.has-value .location-search-clear { display: inline-flex; }
+
+.location-search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 100%;
+  min-width: 260px;
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+}
+
+.location-search-result {
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.location-search-result:hover { background: var(--surface-2); }
 
 .status {
   margin-left: auto;
@@ -268,16 +398,51 @@ main {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: var(--sp-4);
-  z-index: 400;
+  /* sopra ai controlli di Leaflet (z-index 1000 di default, incluso
+     l'attribution "Leaflet | OpenStreetMap contributors" in basso a
+     destra): altrimenti quel testo si sovrappone alle etichette della
+     legenda, che occupa lo stesso angolo */
+  z-index: 1200;
+}
+
+.legend-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
 }
 
 .legend h2 {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
-  margin: 0 0 var(--sp-3);
+  margin: 0;
+}
+
+/* pulsante "i": la spiegazione testuale (il paragrafo) si apre solo qui,
+   la barra col gradiente resta comunque sempre visibile senza doverci
+   cliccare */
+.legend-info {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-faint);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.legend-info svg { width: 15px; height: 15px; }
+.legend-info:hover { color: var(--text); }
+.legend-info[aria-expanded="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
 }
 
 .legend .bar {
@@ -294,12 +459,14 @@ main {
   color: var(--text-faint);
 }
 
-.legend p {
+#legendDesc {
+  display: none;
   margin: var(--sp-3) 0 0;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-muted);
 }
+.legend.open #legendDesc { display: block; }
 
 /* ---------------------------------------------------------------------
    Weather popup (click-to-inspect)
@@ -312,7 +479,7 @@ main {
   border: 1px solid var(--border-strong);
 }
 .leaflet-popup-tip { background: var(--surface); box-shadow: none; border: 1px solid var(--border-strong); }
-.leaflet-popup-content { margin: 0; width: 280px !important; }
+.leaflet-popup-content { margin: 0; width: min(280px, calc(100vw - 56px)) !important; }
 .leaflet-popup-close-button {
   color: var(--text-faint) !important;
   font-size: 18px !important;
@@ -320,7 +487,12 @@ main {
 }
 .leaflet-popup-close-button:hover { color: var(--text) !important; }
 
-.wx-popup { padding: var(--sp-4); }
+.wx-popup {
+  padding: var(--sp-4);
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 .wx-popup .wx-coords {
   font-size: 11px;
@@ -496,10 +668,242 @@ main {
    Responsive
 --------------------------------------------------------------------- */
 @media (max-width: 720px) {
-  .topbar { padding: var(--sp-3) var(--sp-4); }
-  .toolbar { width: 100%; order: 3; }
-  .status { order: 2; margin-left: 0; }
-  .mode-switch { width: 100%; }
-  .mode-switch button { flex: 1 1 0; }
-  .legend { left: var(--sp-3); right: var(--sp-3); width: auto; bottom: var(--sp-3); }
+  .topbar { padding: var(--sp-3) var(--sp-4); gap: var(--sp-2); row-gap: var(--sp-2); }
+
+  .brand h1 { font-size: 18px; }
+
+  /* mode-switch e pulsante filtri specie condividono UNA riga sola: prima
+     stavano su due righe separate (il pulsante "Specie" sembrava un
+     elemento a sé, scollegato dal resto dei controlli) */
+  .toolbar { width: 100%; order: 2; gap: var(--sp-2); flex-wrap: nowrap; }
+
+  .status {
+    order: 3;
+    margin-left: 0;
+    width: 100%;
+    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+  }
+
+  /* il segmented control si restringe quanto serve per lasciare spazio
+     al pulsante filtri nella stessa riga, mantenendo bersagli tattili di
+     almeno 44px */
+  .mode-switch {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    transition: flex 0.32s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease;
+  }
+  .mode-switch button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 3px;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* pulsante filtri: solo icona + contatore, stessa altezza e stesso
+     linguaggio visivo del segmented control accanto a cui vive, invece di
+     un secondo elemento largo "Specie" isolato sotto */
+  .filters-toggle {
+    display: inline-flex;
+    flex: 0 0 44px;
+    height: 44px;
+    width: 44px;
+    padding: 0;
+    justify-content: center;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    color: var(--text-muted);
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease,
+      flex 0.32s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease;
+    position: relative;
+  }
+  .filters-toggle-label { display: none; }
+  .filters-toggle[aria-expanded="true"] {
+    color: var(--text);
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+  }
+  /* il contatore diventa un badge sovrapposto, come su un'icona di
+     notifica: l'icona da sola resta leggibile e compatta */
+  .filters-toggle-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+
+  /* ricerca località su mobile: un pulsante a icona nella stessa riga di
+     mode-switch/filtri. Alla pressione, mode-switch e pulsante filtri si
+     comprimono dinamicamente (flex-basis/opacity in transizione) mentre il
+     campo di ricerca si espande al loro posto e scorre in vista da destra
+     verso sinistra (translateX + opacity sul form, sopra l'espansione del
+     contenitore). Tutto reversibile: chiudendo la ricerca ogni elemento
+     torna al proprio stato/dimensione iniziale con la stessa transizione. */
+  .location-search {
+    position: relative;
+    margin-left: 0;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 44px;
+    /* senza min-width:0 il floor "automatico" (content-based) di un
+       elemento flessibile vince sul flex-basis: 44px non basterebbe a
+       ricomprimerlo del tutto perché il form al suo interno (220px da
+       regola desktop, solo nascosto con opacity) lo terrebbe largo */
+    min-width: 0;
+    transition: flex 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .toolbar.search-open .location-search { flex: 1 1 0; }
+
+  /* mode-switch e pulsante filtri si comprimono a zero (non scompaiono di
+     scatto) per lasciare il posto al campo che si espande */
+  .toolbar.search-open .mode-switch,
+  .toolbar.search-open .filters-toggle {
+    flex: 0 0 0;
+    opacity: 0;
+    pointer-events: none;
+    /* solo qui: durante la compressione l'icona/contatore non deve
+       sporgere dal bottone che si sta rimpicciolendo. Fuori da questo
+       stato l'overflow resta visibile, altrimenti il badge del contatore
+       (posizionato apposta a cavallo del bordo) verrebbe tagliato via */
+    overflow: hidden;
+  }
+
+  /* il pulsante resta sempre visibile e cliccabile, anche a ricerca
+     aperta: diventa così anche il modo per richiudere la barra senza
+     dover per forza cercare qualcosa. Solo l'icona cambia (lente -> X) */
+  .location-search-toggle {
+    flex: 0 0 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    color: var(--text-muted);
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+  .location-search-toggle svg { width: 16px; height: 16px; }
+  .location-search-toggle .icon-close { display: none; }
+  .location-search.open .location-search-toggle .icon-search { display: none; }
+  .location-search.open .location-search-toggle .icon-close { display: block; }
+  .location-search.open .location-search-toggle {
+    color: var(--text);
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+  }
+
+  /* il form resta sempre "montato" (mai display:none) cosi da poter
+     scorrere in vista invece di comparire di scatto; a barra chiusa non
+     ha comunque spazio disponibile nella riga (il contenitore è largo
+     solo quanto il pulsante) quindi resta a larghezza zero */
+  .location-search-form {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    height: 44px;
+    opacity: 0;
+    transform: translateX(28px);
+    pointer-events: none;
+    transition: opacity 0.26s ease, transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .location-search.open .location-search-form {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  .location-search-form .location-search-input { height: 44px; font-size: 15px; }
+
+  .location-search-results {
+    right: auto;
+    left: 0;
+    min-width: 0;
+  }
+
+  .filters-scrim.visible {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 5, 0.55);
+    z-index: 900;
+    animation: wx-fade-in 0.15s ease;
+  }
+
+  .species-filters { display: none; }
+  .species-filters.open {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 950;
+    background: var(--surface);
+    border-top: 1px solid var(--border-strong);
+    border-bottom: none;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: var(--sp-3) var(--sp-4) calc(var(--sp-5) + env(safe-area-inset-bottom));
+    box-shadow: var(--shadow-lg);
+  }
+  /* maniglia decorativa in cima al foglio, come una vera bottom sheet */
+  .species-filters.open::before {
+    content: "";
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--border-strong);
+    margin: 0 auto var(--sp-3);
+  }
+  .species-filters.open .chip {
+    padding: 13px 16px 13px 12px;
+    font-size: 15px;
+    min-height: 44px;
+  }
+  .species-filters.open .chip .dot { width: 11px; height: 11px; }
 }
+
+/* legenda in stile Windy: una barra fissa in fondo allo schermo, sempre
+   visibile (titolo + gradiente + etichette bassa/alta leggibili a
+   colpo d'occhio), che si espande verso l'alto solo per mostrare la
+   spiegazione testuale quando ci si clicca sopra. Attiva sia sotto
+   larghezza stretta (telefono verticale) sia sotto altezza corta
+   (telefono in orizzontale, dove la larghezza da sola non lo farebbe
+   scattare ma una card sempre alta finirebbe comunque per coprire i
+   controlli di zoom) */
+@media (max-width: 720px), (max-height: 480px) {
+  .legend {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: var(--sp-3) var(--sp-4) calc(var(--sp-3) + env(safe-area-inset-bottom));
+    z-index: 1200;
+  }
+  .legend.open { max-height: calc(100vh - 32px); overflow-y: auto; }
+
+  .wx-popup { max-height: min(60vh, 460px); }
+}
+
+@keyframes wx-fade-in { from { opacity: 0; } to { opacity: 1; } }

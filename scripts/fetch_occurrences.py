@@ -10,6 +10,28 @@ iNaturalist "research grade"): i record vengono deduplicati per specie +
 posizione arrotondata (~100m) + data, tenendo la versione GBIF quando
 coincidono (metadata più stabile).
 
+FILTRI DI ATTENDIBILITÀ POSIZIONE (aggiunti dopo aver verificato segnalazioni
+implausibili, es. nel centro di grandi città): scartiamo i record la cui
+posizione non è abbastanza precisa da fidarsene per una mappa di calore,
+individuati controllando incertezza/precisione dichiarata dalle fonti:
+  - GBIF: solo basisOfRecord=HUMAN_OBSERVATION (esclude reperti da erbario/
+    campioni di laboratorio, spesso vecchi di decenni e geocodificati sul
+    nome del comune anziché sul punto di ritrovamento — es. trovato un
+    "Amanita caesarea" del 1892 con incertezza dichiarata di 3km, coordinate
+    coincidenti col centro di Genova) e coordinateUncertaintyInMeters entro
+    COORD_UNCERTAINTY_MAX_M quando il campo è presente.
+  - iNaturalist: esclude le osservazioni "obscured" (posizione volutamente
+    randomizzata dall'utente entro un raggio di ~20-30km — pratica comune
+    per specie pregiate, per proteggere i propri punti di raccolta da altri
+    raccoglitori: la stragrande maggioranza dei casi rilevati) e quelle con
+    public_positional_accuracy oltre la stessa soglia; esclude anche le
+    osservazioni "captive" (funghi coltivati/in vaso, non ritrovamenti
+    selvatici).
+  Verificato: senza questi filtri, sulle ~1100 occorrenze GBIF di Boletus
+  edulis un campione di 300 record ne conteneva 154 (51%) con incertezza
+  dichiarata di circa 27km — quasi tutte osservazioni iNaturalist
+  offuscate ripubblicate via GBIF.
+
 Salva il risultato come un unico GeoJSON con proprietà:
   - species: chiave interna (es. "porcino_comune")
   - label: nome comune italiano
@@ -29,6 +51,11 @@ import requests
 
 GBIF_URL = "https://api.gbif.org/v1/occurrence/search"
 INATURALIST_URL = "https://api.inaturalist.org/v1/observations"
+
+# oltre questa soglia la posizione dichiarata non è abbastanza precisa da
+# fidarsene per attribuire un ritrovamento a una cella/zona specifica —
+# vedi commento in testa al file per come è stata scelta
+COORD_UNCERTAINTY_MAX_M = 2000
 
 # specie da tracciare: chiave interna -> (nome comune, nome scientifico)
 SPECIES = {
@@ -52,6 +79,7 @@ OUT_PATH = Path(__file__).resolve().parent.parent / "web" / "data" / "occurrence
 
 def fetch_gbif(scientific_name):
     records = []
+    skipped_imprecise = 0
     offset = 0
     while offset < GBIF_MAX_RECORDS:
         params = {
@@ -59,6 +87,10 @@ def fetch_gbif(scientific_name):
             "country": "IT",
             "hasCoordinate": "true",
             "hasGeospatialIssue": "false",
+            # esclude reperti da erbario/campioni: non sono "l'ho visto qui",
+            # e spesso hanno solo una posizione approssimata dal nome del
+            # comune — vedi commento in testa al file
+            "basisOfRecord": "HUMAN_OBSERVATION",
             "limit": GBIF_PAGE_SIZE,
             "offset": offset,
         }
@@ -69,6 +101,10 @@ def fetch_gbif(scientific_name):
         for r in results:
             lat, lon = r.get("decimalLatitude"), r.get("decimalLongitude")
             if lat is None or lon is None:
+                continue
+            uncertainty = r.get("coordinateUncertaintyInMeters")
+            if uncertainty is not None and uncertainty > COORD_UNCERTAINTY_MAX_M:
+                skipped_imprecise += 1
                 continue
             records.append(
                 {
@@ -83,16 +119,21 @@ def fetch_gbif(scientific_name):
         if data.get("endOfRecords", True) or not results:
             break
         time.sleep(0.2)
+    if skipped_imprecise:
+        print(f"    (scartati {skipped_imprecise} record GBIF con posizione poco precisa, >{COORD_UNCERTAINTY_MAX_M}m)")
     return records
 
 
 def fetch_inaturalist(scientific_name):
     records = []
+    skipped_imprecise = 0
     for page in range(1, INAT_MAX_PAGES + 1):
         params = {
             "taxon_name": scientific_name,
             "quality_grade": "research,needs_id",
             "geo": "true",
+            # esclude funghi coltivati/in vaso: non sono ritrovamenti selvatici
+            "captive": "false",
             "per_page": INAT_PAGE_SIZE,
             "page": page,
             "order_by": "observed_on",
@@ -108,6 +149,17 @@ def fetch_inaturalist(scientific_name):
             loc = o.get("location")
             if not loc:
                 continue
+            # "obscured": l'utente (o iNaturalist, per specie sensibili) ha
+            # volutamente randomizzato la posizione entro ~20-30km per
+            # proteggere il proprio punto di raccolta — pratica comune per
+            # specie pregiate come queste, vedi commento in testa al file
+            if o.get("obscured"):
+                skipped_imprecise += 1
+                continue
+            accuracy = o.get("public_positional_accuracy")
+            if accuracy is not None and accuracy > COORD_UNCERTAINTY_MAX_M:
+                skipped_imprecise += 1
+                continue
             lat_str, lon_str = loc.split(",")
             date = o.get("observed_on")
             records.append(
@@ -122,6 +174,8 @@ def fetch_inaturalist(scientific_name):
         if len(results) < INAT_PAGE_SIZE:
             break
         time.sleep(1)  # cortesia verso l'API pubblica (rate limit ~60/min)
+    if skipped_imprecise:
+        print(f"    (scartati {skipped_imprecise} record iNaturalist offuscati o poco precisi)")
     return records
 
 

@@ -117,52 +117,69 @@ def fetch_elevation_batch(points):
     return resp.json().get("elevation", [None] * len(points))
 
 
-# NOTA: la fonte corretta per la copertura forestale reale sarebbe l'Overpass
-# API di OpenStreetMap (query su natural=wood / landuse=forest). Non è
-# raggiungibile dalla rete di questo ambiente di sviluppo (né overpass-api.de
-# né il mirror kumi.systems rispondono), e Nominatim — che pure è
-# raggiungibile — non restituisce tag di uso del suolo affidabili in reverse
-# geocoding (per lo più nomi di località vicine). In attesa di rifare questa
-# parte con Overpass una volta online (dove la rete non sarà ristretta),
-# usiamo come proxy interinale le principali fasce forestali/montane
-# italiane note (Alpi, Appennino, rilievi maggiori delle isole): non è una
-# misura di copertura reale cella per cella, ma distingue ragionevolmente le
-# zone di bosco/collina/montagna dalle pianure agricole e dalle aree urbane.
-FOREST_REGIONS = [
-    # (nome, lat, lon, raggio_km)
-    ("Alpi occidentali", 45.5, 7.4, 85),
-    ("Alpi centrali", 46.1, 10.4, 95),
-    ("Dolomiti / Val di Fiemme-Fassa-Cadore", 46.3, 11.8, 65),
-    ("Prealpi venete / Cansiglio", 46.05, 12.35, 40),
-    ("Appennino ligure", 44.5, 9.2, 40),
-    ("Appennino tosco-emiliano / Casentinesi / Mugello", 44.05, 11.6, 65),
-    ("Amiata / Maremma", 42.88, 11.6, 35),
-    ("Appennino umbro-marchigiano / Sibillini", 42.9, 13.15, 50),
-    ("Abruzzo (Majella / Gran Sasso)", 42.05, 13.9, 55),
-    ("Appennino campano-lucano / Cilento", 40.4, 15.6, 55),
-    ("Sila", 39.3, 16.5, 35),
-    ("Aspromonte", 38.2, 15.9, 30),
-    ("Etna", 37.75, 15.0, 25),
-    ("Nebrodi / Madonie", 37.9, 14.3, 40),
-    ("Gennargentu", 40.0, 9.3, 40),
-]
+# Copertura del suolo REALE da Corine Land Cover 2018 (Copernicus/EEA),
+# interrogato punto per punto via il servizio ArcGIS REST pubblico
+# dell'agenzia. Sostituisce la stima precedente basata solo su quota e
+# latitudine: distingueva "zona boschiva sì/no" per fasce geografiche note,
+# non il tipo di bosco cella per cella. Overpass/OSM è stato scartato come
+# fonte perché il tag che distingue conifere da latifoglie (leaf_type)
+# copre solo ~11% dei poligoni di bosco italiani (verificato campionando
+# Toscana/Emilia) — troppo incompleto per filtrare per specie. Corine ha
+# invece copertura completa, benché a risoluzione più bassa (unità minima
+# cartografabile 25 ettari) e senza distinguere la specie esatta di albero.
+CLC_URL = "https://image.discomap.eea.europa.eu/arcgis/rest/services/Corine/CLC2018_WM/MapServer/identify"
 
-KM_PER_DEG_LAT = 111.0
-
-
-def forest_region_score(lat, lon):
-    max_w = 0.0
-    for _, r_lat, r_lon, radius_km in FOREST_REGIONS:
-        dlat = (lat - r_lat) * KM_PER_DEG_LAT
-        dlon = (lon - r_lon) * KM_PER_DEG_LAT * abs(math.cos(math.radians(r_lat)))
-        dist_km = math.hypot(dlat, dlon)
-        w = clamp01(1 - dist_km / radius_km)
-        max_w = max(max_w, w)
-    return max_w
+# codici Corine Land Cover rilevanti per la presenza di un vero bosco/margine
+# boschivo; tutto il resto (agricolo, urbano, acqua, roccia/pascolo nudo...)
+# non lo è e resta "none"
+CLC_VEG_CLASS = {
+    "311": "broadleaf",
+    "312": "conifer",
+    "313": "mixed",
+    "324": "shrub",
+}
 
 
 def clamp01(x):
     return max(0.0, min(1.0, x))
+
+
+def latlon_to_webmercator(lat, lon):
+    x = lon * 20037508.34 / 180
+    y = math.log(math.tan((90 + lat) * math.pi / 360)) / (math.pi / 180) * 20037508.34 / 180
+    return x, y
+
+
+def fetch_clc_code(lat, lon):
+    x, y = latlon_to_webmercator(lat, lon)
+    params = {
+        "geometry": json.dumps({"x": x, "y": y, "spatialReference": {"wkid": 3857}}),
+        "geometryType": "esriGeometryPoint",
+        "sr": 3857,
+        "layers": "all",
+        "tolerance": 1,
+        "mapExtent": "0,0,10,10",
+        "imageDisplay": "10,10,96",
+        "returnGeometry": "false",
+        "f": "json",
+    }
+    resp = requests.get(CLC_URL, params=params, timeout=30)
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+    # preferiamo il layer vettoriale (poligoni, più preciso); il layer
+    # raster fa da riserva se per qualche motivo il primo non risponde
+    vector_code, raster_code = None, None
+    for r in results:
+        attrs = r.get("attributes", {})
+        if r.get("layerId") == 0 and attrs.get("Code_18"):
+            vector_code = attrs["Code_18"]
+        elif r.get("layerId") == 1 and attrs.get("Raster.CODE_18"):
+            raster_code = attrs["Raster.CODE_18"]
+    return vector_code or raster_code
+
+
+def veg_class_score(veg_class):
+    return {"broadleaf": 1.0, "conifer": 1.0, "mixed": 1.0, "shrub": 0.5}.get(veg_class, 0.1)
 
 
 def recency_weight(days_since_rain):
@@ -192,12 +209,6 @@ def elevation_suitability(elevation_m):
     if elevation_m <= 1800:
         return 1.0 - 0.7 * ((elevation_m - 1400) / 400)
     return 0.15
-
-
-def vegetation_score(lat, lon):
-    # 0.2 di base ovunque (piccoli boschi/filari esistono anche fuori dalle
-    # fasce principali) + il contributo della fascia forestale più vicina
-    return clamp01(0.2 + 0.8 * forest_region_score(lat, lon))
 
 
 def compute_weather(lat, lon, payload):
@@ -278,6 +289,24 @@ def main():
             elevation_by_point[(lat, lon)] = elev
         time.sleep(0.3)
 
+    # solo i punti di terraferma: interrogare Corine anche per le celle di
+    # mare residuo nel buffer costiero (scartate poco sotto) sarebbe tempo
+    # sprecato — l'endpoint Corine risponde un punto alla volta, non a lotti
+    land_points = [(lat, lon) for lat, lon in grid if not (elevation_by_point.get((lat, lon)) is not None and elevation_by_point[(lat, lon)] <= 0)]
+
+    veg_class_by_point = {}
+    print(f"Vegetazione (Corine Land Cover): {len(land_points)} punti, una richiesta alla volta...")
+    for idx, (lat, lon) in enumerate(land_points, 1):
+        try:
+            code = with_retries(fetch_clc_code, lat, lon)
+        except requests.RequestException as e:
+            print(f"  Errore Corine per ({lat}, {lon}) dopo retry: {e}, salto (nessun bosco).")
+            code = None
+        veg_class_by_point[(lat, lon)] = CLC_VEG_CLASS.get(code, "none")
+        if idx % 50 == 0 or idx == len(land_points):
+            print(f"  {idx}/{len(land_points)}...")
+        time.sleep(0.15)
+
     features = []
     skipped_sea = 0
     for lat, lon in grid:
@@ -294,7 +323,8 @@ def main():
             continue
 
         weather = weather_by_point.get((lat, lon), {})
-        veg_score = vegetation_score(lat, lon)
+        veg_class = veg_class_by_point.get((lat, lon), "none")
+        veg_score = veg_class_score(veg_class)
         elev_score = elevation_suitability(elevation_m)
         habitat_score = round(clamp01(elev_score * veg_score), 3)
 
@@ -302,6 +332,7 @@ def main():
             "lat": lat,
             "lon": lon,
             "elevation_m": round(elevation_m, 0) if elevation_m is not None else None,
+            "veg_class": veg_class,
             "vegetation_score": round(veg_score, 3),
             "habitat_score": habitat_score,
             **weather,

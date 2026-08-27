@@ -22,19 +22,51 @@
       <h1>Mappa Funghi</h1>
     </div>
 
-    <div class="toolbar">
+    <div class="toolbar" id="toolbar">
       <div class="mode-switch" id="modeSwitch"></div>
-      <div class="species-filters" id="filters"></div>
+      <button class="filters-toggle" id="filtersToggle" type="button" aria-expanded="false" aria-controls="filters" aria-label="Filtra specie">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+        <span class="filters-toggle-label">Specie</span>
+        <span class="filters-toggle-count" id="filtersToggleCount"></span>
+      </button>
+
+      <div class="location-search" id="locationSearch">
+        <button class="location-search-toggle" id="locationSearchToggle" type="button" aria-expanded="false" aria-controls="locationSearchInput" aria-label="Cerca una località">
+          <svg class="icon-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+          <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+        <form class="location-search-form" id="locationSearchForm" autocomplete="off">
+          <svg class="location-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+          <input class="location-search-input" id="locationSearchInput" type="text" placeholder="Cerca una località…" aria-label="Cerca una località" autocomplete="off" spellcheck="false" />
+          <button class="location-search-clear" id="locationSearchClear" type="button" aria-label="Cancella ricerca">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </form>
+        <ul class="location-search-results" id="locationSearchResults" hidden></ul>
+      </div>
     </div>
 
     <div class="status" id="countBadge"></div>
   </header>
 
+  <!-- fuori dall'header di proposito: .topbar crea un proprio contesto di
+       impilamento (position:relative + z-index), quindi uno z-index alto
+       su un elemento fixed annidato lì dentro resterebbe comunque
+       "intrappolato" sotto altri elementi fixed fuori dall'header (come
+       la legenda) — vedi anche filtersScrim qui sotto -->
+  <div class="species-filters" id="filters"></div>
+  <div class="filters-scrim" id="filtersScrim"></div>
+
   <main>
     <div id="map"></div>
 
-    <div class="legend">
-      <h2 id="legendTitle">Densità storica ritrovamenti</h2>
+    <div class="legend" id="legend">
+      <div class="legend-head">
+        <h2 id="legendTitle">Densità storica ritrovamenti</h2>
+        <button class="legend-info" id="legendInfoBtn" type="button" aria-expanded="false" aria-controls="legendDesc" aria-label="Cosa indica questa scala">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 10.5v5.5" /><path d="M12 7.5h.01" /></svg>
+        </button>
+      </div>
       <div class="bar"></div>
       <div class="labels"><span>bassa</span><span>alta</span></div>
       <p id="legendDesc"></p>

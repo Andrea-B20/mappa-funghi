@@ -14,99 +14,100 @@ const ICONS = {
   timer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5v4l2.8 1.8"/><path d="M9.5 2h5"/></svg>`,
 };
 
-// Fasce forestali/montane maggiori dell'Italia, usate come proxy interinale
-// di copertura vegetale finché non è disponibile un dato OSM/Overpass reale
-// (vedi commento in scripts/fetch_weather_grid.py per il perché).
-const FOREST_REGIONS = [
-  [45.5, 7.4, 85], [46.1, 10.4, 95], [46.3, 11.8, 65], [46.05, 12.35, 40],
-  [44.5, 9.2, 40], [44.05, 11.6, 65], [42.88, 11.6, 35], [42.9, 13.15, 50],
-  [42.05, 13.9, 55], [40.4, 15.6, 55], [39.3, 16.5, 35], [38.2, 15.9, 30],
-  [37.75, 15.0, 25], [37.9, 14.3, 40], [40.0, 9.3, 40],
-];
-const KM_PER_DEG_LAT = 111;
-
-function forestRegionScore(lat, lon) {
-  let maxW = 0;
-  for (const [rLat, rLon, radiusKm] of FOREST_REGIONS) {
-    const dLat = (lat - rLat) * KM_PER_DEG_LAT;
-    const dLon = (lon - rLon) * KM_PER_DEG_LAT * Math.abs(Math.cos((rLat * Math.PI) / 180));
-    const dist = Math.hypot(dLat, dLon);
-    maxW = Math.max(maxW, Math.max(0, Math.min(1, 1 - dist / radiusKm)));
-  }
-  return maxW;
-}
-
-// In Italia la composizione forestale è fortemente stratificata per quota:
-// querceti/castagneti in basso, faggete a media quota, conifere in alto (la
-// soglia si alza spostandosi a sud, quindi correggiamo con la latitudine).
-// Senza un dato reale di uso del suolo (Overpass non raggiungibile, vedi
-// scripts/fetch_weather_grid.py) è il proxy più sensato per distinguere il
-// TIPO di bosco — non solo la sua presenza — e quindi filtrare davvero per
-// specie: il porcino dei pini vive con le conifere, l'ovolo quasi solo con
-// querce/castagni in zone calde, ecc.
-const TREE_ZONES = [
-  { key: "broadleaf_warm", center: 350, label: "Querceto / castagneto (bosco caldo)" },
-  { key: "beech", center: 1000, label: "Faggeta" },
-  { key: "conifer_mixed", center: 1600, label: "Bosco misto faggio-conifere" },
-  { key: "conifer_high", center: 2200, label: "Conifere d'alta quota" },
-];
-
-const SPECIES_TREE_AFFINITY = {
-  porcino_comune: { broadleaf_warm: 0.75, beech: 1.0, conifer_mixed: 0.7, conifer_high: 0.3 },
-  porcino_pini: { broadleaf_warm: 0.15, beech: 0.35, conifer_mixed: 0.85, conifer_high: 0.9 },
-  ovolo: { broadleaf_warm: 1.0, beech: 0.35, conifer_mixed: 0.05, conifer_high: 0.02 },
-  gallinaccio: { broadleaf_warm: 0.75, beech: 0.9, conifer_mixed: 0.65, conifer_high: 0.25 },
+// Tipo di copertura del suolo REALE per ogni cella della griglia meteo,
+// da Corine Land Cover (Copernicus/EEA) — vedi scripts/fetch_weather_grid.py.
+// broadleaf/conifer/mixed/shrub/none, non più una stima da quota+latitudine.
+// Affinità di base delle specie per ciascun tipo (il porcino dei pini vive
+// con le conifere, l'ovolo quasi solo con latifoglie calde, ecc.).
+const SPECIES_VEG_AFFINITY = {
+  porcino_comune: { broadleaf: 0.85, conifer: 0.65, mixed: 1.0, shrub: 0.2, none: 0.05 },
+  porcino_pini: { broadleaf: 0.15, conifer: 0.95, mixed: 0.6, shrub: 0.15, none: 0.05 },
+  ovolo: { broadleaf: 1.0, conifer: 0.05, mixed: 0.15, shrub: 0.1, none: 0.05 },
+  gallinaccio: { broadleaf: 0.85, conifer: 0.55, mixed: 0.85, shrub: 0.3, none: 0.05 },
 };
 
-function effectiveElevation(elevation, lat) {
-  return elevation - (lat - 43) * 100;
+// Corine distingue il tipo di bosco (latifoglie/conifere/misto) ma non la
+// quota a cui si trova: due celle "latifoglie" possono essere un querceto
+// mediterraneo a 200m o una faggeta a 1400m, con specie diverse. Questa è
+// una correzione SECONDARIA (una gaussiana larga sulla quota tipica della
+// specie) che affina l'affinità reale, senza mai ribaltarla: un pavimento
+// di 0.4 evita che la sola quota azzeri un'affinità di vegetazione reale.
+const SPECIES_ELEVATION_PREF = {
+  porcino_comune: { center: 900, spread: 900 },
+  porcino_pini: { center: 1300, spread: 900 },
+  ovolo: { center: 350, spread: 500 },
+  gallinaccio: { center: 700, spread: 800 },
+};
+
+function elevationFactor(species, elevation) {
+  if (elevation == null) return 1;
+  const pref = SPECIES_ELEVATION_PREF[species];
+  const z = (elevation - pref.center) / pref.spread;
+  return Math.max(0.4, Math.exp(-0.5 * z * z));
 }
 
-function treeZoneMemberships(effElev) {
-  if (effElev <= TREE_ZONES[0].center) return { [TREE_ZONES[0].key]: 1 };
-  for (let i = 0; i < TREE_ZONES.length - 1; i++) {
-    if (effElev <= TREE_ZONES[i + 1].center) {
-      const t = (effElev - TREE_ZONES[i].center) / (TREE_ZONES[i + 1].center - TREE_ZONES[i].center);
-      return { [TREE_ZONES[i].key]: 1 - t, [TREE_ZONES[i + 1].key]: t };
-    }
+function speciesAffinityAt(species, vegClass, elevation) {
+  const base = SPECIES_VEG_AFFINITY[species]?.[vegClass ?? "none"] ?? 0.3;
+  return base * elevationFactor(species, elevation);
+}
+
+// Etichetta leggibile per il popup: il tipo (latifoglie/conifere/misto) è
+// il dato Corine reale; la quota affina solo la parola usata (es. faggeta
+// vs querceto) per restare più specifica di quanto Corine da solo dica.
+function vegetationTypeLabel(vegClass, elevation) {
+  if (vegClass === "broadleaf") return elevation != null && elevation > 700 ? "Faggeta" : "Querceto / castagneto";
+  if (vegClass === "conifer") return elevation != null && elevation > 1400 ? "Conifere d'alta quota" : "Pineta";
+  if (vegClass === "mixed") return "Bosco misto (latifoglie e conifere)";
+  if (vegClass === "shrub") return "Macchia / vegetazione arbustiva";
+  if (vegClass === "none") return "Nessun bosco significativo qui";
+  return "Tipo di bosco non determinato";
+}
+
+function vegetationInfo(vegClass, elevation) {
+  return { typeLabel: vegetationTypeLabel(vegClass, elevation) };
+}
+
+// codici Corine Land Cover rilevanti per la presenza di un vero bosco (vedi
+// anche CLC_VEG_CLASS in scripts/fetch_weather_grid.py, stessa mappatura)
+const CLC_VEG_CLASS = { 311: "broadleaf", 312: "conifer", 313: "mixed", 324: "shrub" };
+const CLC_IDENTIFY_URL = "https://image.discomap.eea.europa.eu/arcgis/rest/services/Corine/CLC2018_WM/MapServer/identify";
+
+function latLonToWebMercator(lat, lon) {
+  const x = (lon * 20037508.34) / 180;
+  const y = (Math.log(Math.tan(((90 + lat) * Math.PI) / 360)) / (Math.PI / 180)) * (20037508.34 / 180);
+  return { x, y };
+}
+
+// Vegetazione REALE nel punto esatto cliccato, interrogata dal vivo nel
+// browser (Corine Land Cover ha CORS aperto — verificato) invece che presa
+// dalla cella meteo più vicina (fino a 30-40km di distanza, troppo per
+// dire con affidabilità se lì c'è bosco o no): stessa fonte usata per
+// popolare i dati server-side, ma qui alla precisione del singolo click.
+async function fetchClcVegClass(lat, lon) {
+  const { x, y } = latLonToWebMercator(lat, lon);
+  const params = new URLSearchParams({
+    geometry: JSON.stringify({ x, y, spatialReference: { wkid: 3857 } }),
+    geometryType: "esriGeometryPoint",
+    sr: "3857",
+    layers: "all",
+    tolerance: "1",
+    mapExtent: "0,0,10,10",
+    imageDisplay: "10,10,96",
+    returnGeometry: "false",
+    f: "json",
+  });
+  const resp = await fetch(`${CLC_IDENTIFY_URL}?${params}`);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const data = await resp.json();
+  const results = data.results || [];
+  let vectorCode = null;
+  let rasterCode = null;
+  for (const r of results) {
+    const attrs = r.attributes || {};
+    if (r.layerId === 0 && attrs.Code_18) vectorCode = attrs.Code_18;
+    else if (r.layerId === 1 && attrs["Raster.CODE_18"]) rasterCode = attrs["Raster.CODE_18"];
   }
-  return { [TREE_ZONES[TREE_ZONES.length - 1].key]: 1 };
-}
-
-function dominantTreeZone(elevation, lat) {
-  if (elevation == null) return null;
-  const memberships = treeZoneMemberships(effectiveElevation(elevation, lat));
-  const topKey = Object.entries(memberships).sort((a, b) => b[1] - a[1])[0][0];
-  return TREE_ZONES.find((z) => z.key === topKey);
-}
-
-function speciesAffinityAt(species, elevation, lat) {
-  if (elevation == null) return 0.6;
-  const memberships = treeZoneMemberships(effectiveElevation(elevation, lat));
-  let score = 0;
-  for (const [zoneKey, w] of Object.entries(memberships)) {
-    score += w * (SPECIES_TREE_AFFINITY[species]?.[zoneKey] ?? 0.5);
-  }
-  return score;
-}
-
-// Idoneità del tipo di bosco per le specie attualmente selezionate: prende
-// la specie più favorita in quel punto, cosicché selezionare solo "Porcino
-// dei pini" faccia davvero risaltare le zone di conifere e non i querceti.
-function activeSpeciesAffinityAt(elevation, lat) {
-  if (activeSpecies.size === 0) return 0.5;
-  let best = 0;
-  for (const sp of activeSpecies) best = Math.max(best, speciesAffinityAt(sp, elevation, lat));
-  return best;
-}
-
-function vegetationInfo(lat, lon, elevation) {
-  const presence = forestRegionScore(lat, lon);
-  if (presence < 0.15) {
-    return { typeLabel: "Fuori dalle fasce boschive principali" };
-  }
-  const zone = dominantTreeZone(elevation, lat);
-  return { typeLabel: zone ? zone.label : "Tipo non determinabile (quota mancante)" };
+  return CLC_VEG_CLASS[vectorCode || rasterCode] ?? "none";
 }
 
 /* ---------------- Finestra di incubazione pioggia → fruttificazione ----------------
@@ -214,12 +215,12 @@ function conditionsQuality(soilMoisture, humidityPct) {
 // incubazione pioggia-specifica con l'idoneità del tipo di bosco: un luogo
 // "pronto" richiede sia la pioggia giusta al momento giusto sia l'albero
 // simbionte giusto.
-function activeSpeciesReadinessAt(dailyDates, dailyPrecip, elevation, lat) {
+function activeSpeciesReadinessAt(dailyDates, dailyPrecip, vegClass, elevation) {
   if (activeSpecies.size === 0) return 0.5;
   let best = 0;
   for (const sp of activeSpecies) {
     const rain = speciesRainReadiness(sp, dailyDates, dailyPrecip).score;
-    const tree = speciesAffinityAt(sp, elevation, lat);
+    const tree = speciesAffinityAt(sp, vegClass, elevation);
     best = Math.max(best, rain * tree);
   }
   return best;
@@ -229,11 +230,11 @@ function activeSpeciesReadinessAt(dailyDates, dailyPrecip, elevation, lat) {
 // per tutte e 4 le specie tracciate in un punto esatto — la stessa formula
 // usata per colorare la mappa, così il popup e la mappa raccontano sempre
 // la stessa storia. Ordinato dalla più alla meno pronta in questo momento.
-function speciesReadinessList(dailyDates, dailyPrecip, elevation, lat) {
+function speciesReadinessList(dailyDates, dailyPrecip, vegClass, elevation) {
   return Object.keys(SPECIES_META)
     .map((sp) => {
       const rain = speciesRainReadiness(sp, dailyDates, dailyPrecip);
-      const tree = speciesAffinityAt(sp, elevation, lat);
+      const tree = speciesAffinityAt(sp, vegClass, elevation);
       return { sp, label: SPECIES_META[sp].label, color: SPECIES_META[sp].color, ...rain, score: rain.score * tree };
     })
     .sort((a, b) => b.score - a.score);
@@ -285,7 +286,7 @@ function speciesDetailText(r) {
 const MODE_LABELS = {
   storico: {
     title: "Densità storica ritrovamenti",
-    desc: "Concentrazione di segnalazioni passate (GBIF + iNaturalist) per le specie selezionate.",
+    desc: "Concentrazione di segnalazioni passate per le specie selezionate.",
   },
   meteo: {
     title: "Favorevolezza meteo attuale",
@@ -374,13 +375,12 @@ const HeatCanvasLayer = L.Layer.extend({
     map.off("moveend resize", this._reset, this);
     map.off("zoomanim", this._animateZoom, this);
   },
-  setZones(zones, radiusMeters) {
+  setZones(zones) {
     this._zones = zones;
-    this._radiusMeters = radiusMeters;
     this._redraw();
   },
   clearLayers() {
-    this.setZones([], this._radiusMeters);
+    this.setZones([]);
   },
   _animateZoom(e) {
     const map = this._map;
@@ -404,7 +404,7 @@ const HeatCanvasLayer = L.Layer.extend({
     const h = this._canvas.height;
     if (w === 0 || h === 0) return;
     ctx.clearRect(0, 0, w, h);
-    if (!this._zones || !this._zones.length || !this._radiusMeters) return;
+    if (!this._zones || !this._zones.length) return;
 
     // Il campo di calore è campionato su una griglia di calcolo più rada
     // (un campione ogni CELL px) invece che pixel per pixel: per ogni
@@ -428,7 +428,7 @@ const HeatCanvasLayer = L.Layer.extend({
       if (z.value <= 0.03) continue;
       const p = map.latLngToLayerPoint([z.lat, z.lon]).subtract(origin);
       const metersPerPixel = (156543.03392804097 * Math.cos((z.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
-      const r = this._radiusMeters / metersPerPixel;
+      const r = z.r / metersPerPixel;
       if (p.x + r < 0 || p.x - r > w || p.y + r < 0 || p.y - r > h) continue;
 
       const gx0 = Math.max(0, Math.floor((p.x - r) / CELL));
@@ -487,6 +487,14 @@ const zonesLayer = new HeatCanvasLayer().addTo(map);
 let occurrences = [];
 let weatherCells = [];
 let weatherGridStepDeg = 0.5;
+// vegetazione/quota REALI alla risoluzione fine (0.15°, la stessa di
+// buildHistoricalGrid), precalcolate solo per le celle che contengono
+// ritrovamenti storici — vedi scripts/fetch_vegetation_fine.py. Sostituisce
+// la cella meteo più vicina (0.5°, fino a 30-40km di distanza) come fonte
+// di vegetazione per "Combinato": un ritrovamento reale in fondovalle non
+// deve più ereditare "nessun bosco" dalla vetta alpina più vicina sulla
+// griglia meteo.
+let vegetationFineByKey = new Map();
 let mode = "combinato";
 const activeSpecies = new Set(Object.keys(SPECIES_META));
 
@@ -517,9 +525,177 @@ function buildFilters() {
       if (input.checked) activeSpecies.add(key);
       else activeSpecies.delete(key);
       chip.classList.toggle("active", input.checked);
+      updateFiltersToggleCount();
       render();
     });
     container.appendChild(chip);
+  });
+  updateFiltersToggleCount();
+}
+
+function updateFiltersToggleCount() {
+  const el = document.getElementById("filtersToggleCount");
+  if (el) el.textContent = activeSpecies.size;
+}
+
+// Su schermi stretti i filtri specie e la legenda diventano menu a
+// comparsa (bottom sheet / sezione a scomparsa) invece di restare sempre
+// visibili: altrimenti occuperebbero gran parte dello schermo prima
+// ancora di mostrare la mappa. Su desktop questi controlli non fanno
+// nulla di visibile (le media query disattivano lo stato "chiuso").
+function setupMobileMenus() {
+  const filtersToggle = document.getElementById("filtersToggle");
+  const filtersEl = document.getElementById("filters");
+  const scrim = document.getElementById("filtersScrim");
+
+  const closeFilters = () => {
+    filtersEl.classList.remove("open");
+    filtersToggle.setAttribute("aria-expanded", "false");
+    scrim.classList.remove("visible");
+  };
+  const openFilters = () => {
+    filtersEl.classList.add("open");
+    filtersToggle.setAttribute("aria-expanded", "true");
+    scrim.classList.add("visible");
+  };
+  filtersToggle.addEventListener("click", () => {
+    if (filtersEl.classList.contains("open")) closeFilters();
+    else openFilters();
+  });
+  scrim.addEventListener("click", closeFilters);
+
+  // la spiegazione della legenda si apre solo al tocco del pulsante "i",
+  // non più leggendo per forza il paragrafo ogni volta: la barra col
+  // titolo/gradiente resta comunque sempre visibile
+  const legend = document.getElementById("legend");
+  const legendInfoBtn = document.getElementById("legendInfoBtn");
+  legendInfoBtn.addEventListener("click", () => {
+    const open = legend.classList.toggle("open");
+    legendInfoBtn.setAttribute("aria-expanded", String(open));
+  });
+}
+
+// Ricerca località: usa Nominatim (OpenStreetMap), l'unico servizio di
+// geocoding gratuito e senza chiave API adatto a un sito statico come
+// questo. Rispettiamo la sua policy d'uso con un debounce (niente richieste
+// a ogni tasto premuto) e una richiesta alla volta (le precedenti in corso
+// vengono abortite).
+const NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search";
+const LOCATION_SEARCH_MIN_CHARS = 3;
+const LOCATION_SEARCH_DEBOUNCE_MS = 400;
+
+function shortLocationLabel(displayName) {
+  return displayName.split(",").slice(0, 3).join(",").trim();
+}
+
+function setupLocationSearch() {
+  const container = document.getElementById("locationSearch");
+  const toolbarEl = document.getElementById("toolbar");
+  const toggle = document.getElementById("locationSearchToggle");
+  const form = document.getElementById("locationSearchForm");
+  const input = document.getElementById("locationSearchInput");
+  const clearBtn = document.getElementById("locationSearchClear");
+  const resultsList = document.getElementById("locationSearchResults");
+
+  let debounceTimer = null;
+  let abortController = null;
+
+  const hideResults = () => {
+    resultsList.hidden = true;
+    resultsList.innerHTML = "";
+  };
+
+  const closeSearch = () => {
+    container.classList.remove("open");
+    toolbarEl.classList.remove("search-open");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-label", "Cerca una località");
+    hideResults();
+  };
+  const openSearch = () => {
+    container.classList.add("open");
+    toolbarEl.classList.add("search-open");
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.setAttribute("aria-label", "Chiudi ricerca");
+    input.focus();
+  };
+  toggle.addEventListener("click", () => {
+    if (container.classList.contains("open")) closeSearch();
+    else openSearch();
+  });
+
+  clearBtn.addEventListener("click", () => {
+    input.value = "";
+    form.classList.remove("has-value");
+    hideResults();
+    input.focus();
+  });
+
+  function renderResults(results) {
+    resultsList.innerHTML = "";
+    if (!results.length) {
+      hideResults();
+      return;
+    }
+    results.forEach((r) => {
+      const lat = parseFloat(r.lat);
+      const lon = parseFloat(r.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      const li = document.createElement("li");
+      li.className = "location-search-result";
+      li.textContent = shortLocationLabel(r.display_name);
+      li.addEventListener("click", () => {
+        map.flyTo([lat, lon], 13, { duration: 1 });
+        input.value = shortLocationLabel(r.display_name);
+        closeSearch();
+      });
+      resultsList.appendChild(li);
+    });
+    resultsList.hidden = false;
+  }
+
+  async function runSearch(query) {
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
+    const url =
+      `${NOMINATIM_SEARCH_URL}?format=json&countrycodes=it&limit=5&accept-language=it&q=` +
+      encodeURIComponent(query);
+    try {
+      const resp = await fetch(url, { signal: abortController.signal });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      renderResults(await resp.json());
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        console.error(err);
+        renderResults([]);
+      }
+    }
+  }
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    form.classList.toggle("has-value", q.length > 0);
+    clearTimeout(debounceTimer);
+    if (q.length < LOCATION_SEARCH_MIN_CHARS) {
+      hideResults();
+      return;
+    }
+    debounceTimer = setTimeout(() => runSearch(q), LOCATION_SEARCH_DEBOUNCE_MS);
+  });
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (q.length < LOCATION_SEARCH_MIN_CHARS) return;
+    clearTimeout(debounceTimer);
+    runSearch(q);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!container.contains(e.target)) hideResults();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && container.classList.contains("open")) closeSearch();
   });
 }
 
@@ -560,6 +736,51 @@ function haversineDeg(lat1, lon1, lat2, lon2) {
   return Math.sqrt(dLat * dLat + dLon * dLon);
 }
 
+// Nucleo denso (centro storico/edificato) delle maggiori città italiane:
+// [nome, lat, lon, raggio del nucleo in km]. Qui la presenza di funghi
+// selvatici è irreale (asfalto/edifici) — un ritrovamento reale a pochi km
+// di distanza, in un parco vero, non deve comunque "dipingere" di colore
+// anche il centro pavimentato. Non è un filtro sui dati (che restano reali
+// e posizionati esattamente dove sono stati raccolti): agisce solo sul
+// colore renderizzato in quei punti precisi. Elenco non esaustivo (le
+// città maggiori, per popolazione/estensione del nucleo edificato).
+const URBAN_CORES = [
+  ["Roma", 41.9028, 12.4964, 3.0], ["Milano", 45.4642, 9.19, 2.5], ["Napoli", 40.8518, 14.2681, 2.5],
+  ["Torino", 45.0703, 7.6869, 2.0], ["Palermo", 38.1157, 13.3615, 2.0], ["Genova", 44.4056, 8.9463, 2.0],
+  ["Bologna", 44.4949, 11.3426, 1.8], ["Firenze", 43.7696, 11.2558, 1.8], ["Bari", 41.1171, 16.8719, 1.5],
+  ["Catania", 37.5079, 15.083, 1.5], ["Venezia", 45.4408, 12.3155, 1.5], ["Verona", 45.4384, 10.9916, 1.3],
+  ["Messina", 38.1938, 15.554, 1.3], ["Padova", 45.4064, 11.8768, 1.3], ["Trieste", 45.6495, 13.7768, 1.3],
+  ["Brescia", 45.5416, 10.2118, 1.2], ["Taranto", 40.4644, 17.247, 1.3], ["Prato", 43.8777, 11.1023, 1.2],
+  ["Reggio Calabria", 38.1113, 15.6619, 1.2], ["Modena", 44.6471, 10.9252, 1.1], ["Reggio Emilia", 44.6989, 10.6297, 1.1],
+  ["Perugia", 43.1122, 12.3888, 1.1], ["Livorno", 43.5485, 10.3106, 1.1], ["Ravenna", 44.4184, 12.2035, 1.1],
+  ["Cagliari", 39.2238, 9.1217, 1.3], ["Foggia", 41.4621, 15.5444, 1.1], ["Rimini", 44.0678, 12.5695, 1.1],
+  ["Salerno", 40.6824, 14.7681, 1.1], ["Ferrara", 44.8381, 11.6198, 1.1], ["Sassari", 40.7259, 8.559, 1.1],
+  ["Latina", 41.4676, 12.9037, 1.0], ["Monza", 45.5845, 9.2744, 1.0], ["Siracusa", 37.0755, 15.2866, 1.1],
+  ["Pescara", 42.4643, 14.2142, 1.1], ["Bergamo", 45.6983, 9.6773, 1.0], ["Forlì", 44.2226, 12.0407, 1.0],
+  ["Trento", 46.0679, 11.1211, 1.0], ["Vicenza", 45.5455, 11.5354, 1.0], ["Terni", 42.5636, 12.6433, 1.0],
+  ["Bolzano", 46.4983, 11.3548, 1.0], ["Novara", 45.4469, 8.6169, 1.0], ["Piacenza", 45.0526, 9.6929, 1.0],
+  ["Ancona", 43.6158, 13.5189, 1.0], ["Udine", 46.0711, 13.2346, 1.0], ["Arezzo", 43.4633, 11.8797, 1.0],
+  ["Lecce", 40.3519, 18.172, 1.0], ["Pesaro", 43.9102, 12.9133, 1.0],
+];
+
+// 0 dentro al nucleo urbano, torna a 1 (nessuna attenuazione) sfumando con
+// dolcezza fino a ~2.2× il raggio del nucleo — mai un bordo netto, coerente
+// con come si fonde il resto della heatmap.
+function urbanSuppressionFactor(lat, lon) {
+  let factor = 1;
+  for (const [, clat, clon, coreKm] of URBAN_CORES) {
+    const dKm = haversineDeg(lat, lon, clat, clon) * 111;
+    const edgeKm = coreKm * 2.2;
+    if (dKm >= edgeKm) continue;
+    const f = dKm <= coreKm ? 0 : (() => {
+      const t = (dKm - coreKm) / (edgeKm - coreKm);
+      return t * t * (3 - 2 * t);
+    })();
+    factor = Math.min(factor, f);
+  }
+  return factor;
+}
+
 // Raggruppa i punti storici in celle di griglia fissa: ogni cella con
 // segnalazioni diventa una zona reale, invece di un punto la cui area
 // visibile dipende dallo zoom corrente.
@@ -580,7 +801,7 @@ function buildHistoricalGrid(filteredOccurrences) {
     const { key, lat: cLat, lon: cLon } = fineCellCenter(lat, lon);
     const existing = cells.get(key);
     if (existing) existing.count++;
-    else cells.set(key, { lat: cLat, lon: cLon, count: 1 });
+    else cells.set(key, { key, lat: cLat, lon: cLon, count: 1 });
   }
   return [...cells.values()];
 }
@@ -603,7 +824,12 @@ function zonesForStorico() {
   const filtered = occurrences.filter((f) => activeSpecies.has(f.properties.species));
   const cells = buildHistoricalGrid(filtered);
   const maxCount = Math.max(1, ...cells.map((c) => c.count));
-  return cells.map((c) => ({ lat: c.lat, lon: c.lon, value: c.count / maxCount }));
+  return cells.map((c) => ({
+    lat: c.lat,
+    lon: c.lon,
+    value: (c.count / maxCount) * urbanSuppressionFactor(c.lat, c.lon),
+    count: c.count,
+  }));
 }
 
 function zonesForMeteo() {
@@ -614,8 +840,8 @@ function zonesForMeteo() {
     const readiness = activeSpeciesReadinessAt(
       f.properties.daily_dates,
       f.properties.daily_precip_mm,
-      f.properties.elevation_m,
-      lat
+      f.properties.veg_class,
+      f.properties.elevation_m
     );
     // umidità generale del suolo/aria × finestra di incubazione pioggia →
     // fruttificazione specifica delle specie selezionate (soglia di pioggia
@@ -634,38 +860,52 @@ function zonesForCombinato() {
 
   const raw = cells.map((c) => {
     const norm = c.count / maxCount;
+    // meteo/condizioni del suolo: variano con continuità su decine di km,
+    // la cella meteo (0.5°) più vicina va benissimo per questi
     const nearest = nearestWeatherCell(c.lat, c.lon);
     const conditions = nearest ? conditionsQuality(nearest.properties.soil_moisture, nearest.properties.humidity_pct) : 0.4;
-    const habitat = nearest ? (nearest.properties.habitat_score ?? 0.5) : 0.5;
-    const elevation = nearest ? nearest.properties.elevation_m : null;
+    // vegetazione e quota invece cambiano bruscamente nel giro di poche
+    // centinaia di metri in montagna: qui serve il dato alla risoluzione
+    // fine calcolato apposta su questa esatta cella con ritrovamenti,
+    // non la cella meteo più vicina (poteva distare 30-40km)
+    const fineVeg = vegetationFineByKey.get(c.key);
+    const habitat = fineVeg ? fineVeg.habitat_score : nearest ? (nearest.properties.habitat_score ?? 0.5) : 0.5;
+    const elevation = fineVeg ? fineVeg.elevation_m : nearest ? nearest.properties.elevation_m : null;
+    const vegClass = fineVeg ? fineVeg.veg_class : nearest ? nearest.properties.veg_class : null;
     const readiness = nearest
-      ? activeSpeciesReadinessAt(nearest.properties.daily_dates, nearest.properties.daily_precip_mm, elevation, c.lat)
+      ? activeSpeciesReadinessAt(nearest.properties.daily_dates, nearest.properties.daily_precip_mm, vegClass, elevation)
       : 0.5;
     // storico locale × condizioni generali × idoneità del luogo (quota +
     // fascia boschiva) × finestra pioggia-fruttificazione delle specie
     // selezionate. Ogni fattore ha un pavimento: un ritrovamento storico
     // reale resta un'evidenza concreta anche quando il nostro modello
     // quota/pioggia per quel punto fosse impreciso
-    const value = norm * (0.3 + 0.7 * conditions) * (0.3 + 0.7 * habitat) * (0.3 + 0.7 * readiness);
-    return { lat: c.lat, lon: c.lon, value };
+    const value =
+      norm * (0.3 + 0.7 * conditions) * (0.3 + 0.7 * habitat) * (0.3 + 0.7 * readiness) * urbanSuppressionFactor(c.lat, c.lon);
+    return { lat: c.lat, lon: c.lon, value, count: c.count };
   });
 
   const maxValue = Math.max(0.01, ...raw.map((z) => z.value));
   return raw.map((z) => ({ ...z, value: z.value / maxValue }));
 }
 
+// Raggio di sfumatura fisso, uguale per ogni zona (non più proporzionale
+// al numero di segnalazioni: restringeva troppo anche le zone rurali ben
+// documentate). Il problema delle "macchie" sopra i centri città si
+// risolve invece sopprimendo il valore lì — vedi urbanSuppressionFactor
+// più sotto — non riducendo il raggio ovunque.
 function zoneRadiusMeters() {
   if (mode === "meteo") return weatherGridStepDeg * 111000 * 0.85;
   return FINE_GRID_STEP_DEG * 111000 * 0.75;
 }
 
 function drawZones(zones) {
-  zonesLayer.setZones(zones, zoneRadiusMeters());
+  const r = zoneRadiusMeters();
+  zonesLayer.setZones(zones.map((z) => ({ ...z, r })));
 }
 
 function render() {
   let zones = [];
-  const activeCount = occurrences.filter((f) => activeSpecies.has(f.properties.species)).length;
 
   if (mode === "storico") {
     zones = zonesForStorico();
@@ -674,11 +914,6 @@ function render() {
   } else {
     zones = zonesForCombinato();
   }
-
-  const badge = document.getElementById("countBadge");
-  if (mode === "storico") badge.textContent = `${activeCount} osservazioni storiche in ${zones.length} zone (GBIF + iNaturalist)`;
-  else if (mode === "meteo") badge.textContent = `${zones.length} zone meteo (Open-Meteo)`;
-  else badge.textContent = `${activeCount} osservazioni storiche in ${zones.length} zone, pesate per il meteo attuale`;
 
   drawZones(zones);
 }
@@ -800,8 +1035,12 @@ function popupContent(lat, lon, data, openIdx = null) {
   const soilPercent = soilPct(soil);
 
   const elevation = typeof data.elevation === "number" ? Math.round(data.elevation) : null;
-  const veg = vegetationInfo(lat, lon, elevation);
-  const species = speciesReadinessList(dates, precip, elevation, lat);
+  // vegetazione reale (Corine Land Cover) interrogata dal vivo nel punto
+  // esatto cliccato in onMapClick — non dalla cella meteo più vicina, che
+  // può distare 30-40km e restituire un tipo di bosco sbagliato
+  const vegClass = data.vegClass ?? null;
+  const veg = vegetationInfo(vegClass, elevation);
+  const species = speciesReadinessList(dates, precip, vegClass, elevation);
 
   const openSpecies = openIdx != null ? species[openIdx] : null;
   const highlight =
@@ -910,13 +1149,18 @@ function onMapClick(e) {
     `&daily=precipitation_sum&hourly=relative_humidity_2m,soil_moisture_0_to_1cm` +
     `&past_days=16&forecast_days=1&timezone=auto`;
 
-  fetch(url)
-    .then((r) => {
+  Promise.all([
+    fetch(url).then((r) => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
-    })
-    .then((data) => {
+    }),
+    // se Corine non risponde, il popup resta comunque utile con meteo/pioggia:
+    // la vegetazione ripiega su "non determinato" invece di far fallire tutto
+    fetchClcVegClass(lat, lng).catch(() => null),
+  ])
+    .then(([data, vegClass]) => {
       if (map.hasLayer(popup)) {
+        data.vegClass = vegClass;
         lastPopupParams = { lat, lon: lng, data };
         popup.setContent(popupContent(lat, lng, data, openSpeciesIdx));
       }
@@ -932,16 +1176,20 @@ function onMapClick(e) {
 buildFilters();
 buildModeSwitch();
 updateLegend();
+setupMobileMenus();
+setupLocationSearch();
 map.on("click", onMapClick);
 
 Promise.all([
   fetch("data/occurrences.geojson").then((r) => r.json()),
   fetch("data/weather_grid.geojson").then((r) => r.json()),
+  fetch("data/vegetation_fine.geojson").then((r) => r.json()),
 ])
-  .then(([occGeojson, weatherGeojson]) => {
+  .then(([occGeojson, weatherGeojson, vegFineGeojson]) => {
     occurrences = occGeojson.features;
     weatherCells = weatherGeojson.features;
     weatherGridStepDeg = weatherGeojson.grid_step_deg || 0.5;
+    vegetationFineByKey = new Map(vegFineGeojson.features.map((f) => [f.properties.cell_key, f.properties]));
     render();
   })
   .catch((err) => {
