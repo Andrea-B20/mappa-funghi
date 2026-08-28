@@ -693,25 +693,29 @@ main {
    Responsive
 --------------------------------------------------------------------- */
 @media (max-width: 720px) {
-  .topbar { padding: var(--sp-3) var(--sp-4); gap: var(--sp-2); row-gap: var(--sp-2); }
+  /* la mappa è il contenuto principale: header il più basso possibile.
+     Marchio e controlli condividono un'unica riga compatta (prima erano
+     due righe separate, "Mappa Funghi" per esteso + una riga sotto) */
+  .topbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
 
-  .brand h1 { font-size: 18px; }
+  .brand { gap: 6px; flex: 0 0 auto; }
+  .brand svg { width: 22px; height: 22px; }
+  /* il nome resta nell'head <title>/nell'app store, non serve occupare
+     spazio prezioso in cima allo schermo su un telefono */
+  .brand h1 { display: none; }
 
-  /* mode-switch e pulsante filtri specie condividono UNA riga sola: prima
-     stavano su due righe separate (il pulsante "Specie" sembrava un
-     elemento a sé, scollegato dal resto dei controlli) */
-  .toolbar { width: 100%; order: 2; gap: var(--sp-2); flex-wrap: nowrap; }
+  .toolbar { gap: var(--sp-2); flex-wrap: nowrap; }
 
+  /* solo per il raro messaggio d'errore di caricamento dati: si stringe
+     nella riga invece di spingerla a capo (niente più riga dedicata, la
+     riga dell'header è ormai una sola) */
   .status {
-    order: 3;
     margin-left: 0;
-    width: 100%;
-    white-space: normal;
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 1;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
   }
 
   /* il segmented control si restringe quanto serve per lasciare spazio
@@ -918,17 +922,35 @@ main {
    scattare ma una card sempre alta finirebbe comunque per coprire i
    controlli di zoom) */
 @media (max-width: 720px), (max-height: 480px) {
+  /* header compatto anche in orizzontale: qui l'altezza è la risorsa
+     scarsa, non la larghezza, ma vale la stessa priorità alla mappa */
+  .topbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
+  .brand { gap: 6px; flex: 0 0 auto; }
+  .brand svg { width: 22px; height: 22px; }
+  .brand h1 { display: none; }
+
+  /* più compatta: la mappa deve restare l'elemento principale, questa è
+     solo una scala di riferimento sempre visibile, non serve occupi
+     tanto spazio quanto la mappa stessa */
   .legend {
     position: fixed;
     left: 0;
     right: 0;
     bottom: 0;
     width: auto;
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-    padding: var(--sp-3) var(--sp-4) calc(var(--sp-3) + env(safe-area-inset-bottom));
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom));
     z-index: 1200;
   }
   .legend.open { max-height: calc(100vh - 32px); overflow-y: auto; }
+
+  .legend-head { margin-bottom: 6px; }
+  .legend h2 { font-size: 10.5px; }
+  .legend-info { width: 20px; height: 20px; }
+  .legend-info svg { width: 13px; height: 13px; }
+  .legend .bar { height: 6px; }
+  .legend .labels { margin-top: 5px; font-size: 10px; }
+  #legendDesc { font-size: 11.5px; margin-top: var(--sp-2); }
 
   .wx-popup { max-height: min(60vh, 460px); }
 

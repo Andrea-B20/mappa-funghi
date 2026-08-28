@@ -1125,18 +1125,33 @@ window.hideRainTip = function () {
   });
 };
 
+// Header (in alto) e legenda (in basso, su mobile a tutta larghezza) sono
+// overlay fissi fuori dal DOM della mappa: Leaflet non sa che coprono
+// parte del suo container, quindi il suo auto-pan calcolato sulla sola
+// dimensione della mappa può posizionare il popup proprio dietro a questi
+// elementi. Misuriamo le altezze reali (cambiano tra desktop/mobile e in
+// base allo stato aperto/chiuso della legenda) invece di un valore fisso.
+function popupAutoPanPadding() {
+  const headerEl = document.querySelector(".topbar");
+  const legendEl = document.getElementById("legend");
+  const headerH = headerEl ? headerEl.getBoundingClientRect().height : 0;
+  const legendH = legendEl ? legendEl.getBoundingClientRect().height : 0;
+  return {
+    top: L.point(16, headerH + 16),
+    bottom: L.point(16, legendH + 16),
+  };
+}
+
 function onMapClick(e) {
   const { lat, lng } = e.latlng;
   openSpeciesIdx = null;
+  const pad = popupAutoPanPadding();
   const popup = L.popup({
     className: "wx-leaflet-popup",
     maxWidth: 320,
     minWidth: 280,
-    // margine di rispetto da header (in alto) e legenda (in basso, dove
-    // su mobile occupa tutta la larghezza): altrimenti l'auto-pan di
-    // Leaflet può posizionare il popup proprio dietro a questi elementi
-    autoPanPaddingTopLeft: L.point(16, 120),
-    autoPanPaddingBottomRight: L.point(16, 110),
+    autoPanPaddingTopLeft: pad.top,
+    autoPanPaddingBottomRight: pad.bottom,
   })
     .setLatLng(e.latlng)
     .setContent(popupSkeleton(lat, lng))
