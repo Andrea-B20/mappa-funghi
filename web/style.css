@@ -967,16 +967,15 @@ main {
     left: auto;
     right: calc(var(--sp-2) + env(safe-area-inset-right));
     bottom: calc(var(--sp-2) + env(safe-area-inset-bottom));
-    width: 172px;
+    width: 190px;
     max-height: 62px;
     overflow: hidden;
     border-radius: var(--radius-md);
     padding: var(--sp-2) 10px;
     z-index: 1200;
-    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .legend.open {
-    width: 220px;
     max-height: min(60vh, 280px);
     overflow-y: auto;
   }
