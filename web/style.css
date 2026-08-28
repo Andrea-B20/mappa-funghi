@@ -199,6 +199,11 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+/* etichetta breve (mostrata solo sotto i 720px, vedi sezione Responsive)
+   per non dover troncare con l'ellissi "Meteo attuale"/"Combinato" negli
+   spazi stretti di un telefono */
+.ms-label-short { display: none; }
+
 .mode-switch button:hover { color: var(--text); }
 
 .mode-switch button.active {
@@ -434,6 +439,11 @@ main {
      legenda, che occupa lo stesso angolo */
   z-index: 1200;
 }
+
+/* il badge occupa lo stesso angolo in cui si apre il menu specie a
+   comparsa: va tolto di mezzo mentre quel menu è aperto, altrimenti ci
+   resterebbe sovrimpresso sopra */
+.legend.hidden-for-filters { display: none; }
 
 .legend-head {
   display: flex;
@@ -739,12 +749,17 @@ main {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 3px;
+    padding: 6px 2px;
     font-size: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* sotto i 720px l'etichetta breve rimpiazza quella estesa: a font
+     minuscolo "Meteo attuale"/"Combinato" finivano troncati con
+     l'ellissi, illeggibili */
+  .ms-label-full { display: none; }
+  .ms-label-short { display: inline; }
 
   /* pulsante filtri: solo icona + contatore, stessa altezza e stesso
      linguaggio visivo del segmented control accanto a cui vive, invece di

@@ -341,6 +341,9 @@ const COLOR_LUT = (() => {
 
 const map = L.map("map", { zoomControl: false }).setView([42.3, 12.8], 6);
 L.control.zoom({ position: "topright" }).addTo(map);
+// in basso a sinistra: l'angolo opposto rispetto al badge "Probabilità
+// stimata" (in basso a destra), così i crediti non ci finiscono mai dietro
+map.attributionControl.setPosition("bottomleft");
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors",
   maxZoom: 18,
@@ -547,16 +550,22 @@ function setupMobileMenus() {
   const filtersToggle = document.getElementById("filtersToggle");
   const filtersEl = document.getElementById("filters");
   const scrim = document.getElementById("filtersScrim");
+  const legend = document.getElementById("legend");
 
+  // il badge legenda sta in basso a destra, proprio dove il menu specie
+  // (foglio a comparsa dal basso) si apre: nascondiamolo mentre il menu
+  // è aperto, altrimenti ci finisce sovrimpresso sopra
   const closeFilters = () => {
     filtersEl.classList.remove("open");
     filtersToggle.setAttribute("aria-expanded", "false");
     scrim.classList.remove("visible");
+    legend.classList.remove("hidden-for-filters");
   };
   const openFilters = () => {
     filtersEl.classList.add("open");
     filtersToggle.setAttribute("aria-expanded", "true");
     scrim.classList.add("visible");
+    legend.classList.add("hidden-for-filters");
   };
   filtersToggle.addEventListener("click", () => {
     if (filtersEl.classList.contains("open")) closeFilters();
@@ -567,7 +576,6 @@ function setupMobileMenus() {
   // la spiegazione della legenda si apre solo al tocco del pulsante "i",
   // non più leggendo per forza il paragrafo ogni volta: la barra col
   // titolo/gradiente resta comunque sempre visibile
-  const legend = document.getElementById("legend");
   const legendInfoBtn = document.getElementById("legendInfoBtn");
   legendInfoBtn.addEventListener("click", () => {
     const open = legend.classList.toggle("open");
@@ -699,11 +707,22 @@ function setupLocationSearch() {
   });
 }
 
+// Etichetta breve per lo spazio ridotto di uno smartphone (mostrata via
+// CSS sotto i 720px) ed etichetta estesa per il resto: niente più testo
+// troncato con l'ellissi, che rendeva "Meteo attuale"/"Combinato"
+// illeggibili sui telefoni più stretti.
+const MODE_BUTTON_LABELS = {
+  storico: { full: "Storico", short: "Storico" },
+  meteo: { full: "Meteo attuale", short: "Meteo" },
+  combinato: { full: "Combinato", short: "Misto" },
+};
+
 function buildModeSwitch() {
   const container = document.getElementById("modeSwitch");
   Object.keys(MODE_LABELS).forEach((key) => {
     const btn = document.createElement("button");
-    btn.textContent = { storico: "Storico", meteo: "Meteo attuale", combinato: "Combinato" }[key];
+    const { full, short } = MODE_BUTTON_LABELS[key];
+    btn.innerHTML = `<span class="ms-label-full">${full}</span><span class="ms-label-short">${short}</span>`;
     btn.className = key === mode ? "active" : "";
     btn.addEventListener("click", () => {
       mode = key;
