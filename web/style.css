@@ -171,6 +171,11 @@ input:focus-visible {
   gap: var(--sp-4);
   flex-wrap: wrap;
   flex: 1 1 auto;
+  /* senza questo, il "floor" automatico (basato sul contenuto) di un
+     contenitore flessibile che è a sua volta figlio di un altro flex
+     vince sul flex-shrink: su schermi stretti la riga trabocca invece di
+     restringersi, spingendo l'icona di ricerca fuori dallo schermo */
+  min-width: 0;
 }
 
 /* segmented mode switch */
@@ -789,7 +794,13 @@ main {
     height: 44px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    /* niente gap qui: a barra chiusa il form è largo 0 (invisibile), ma
+       il gap conta comunque come spazio anche verso un figlio a
+       larghezza zero — con un container di soli 44px (il pulsante da
+       solo) basterebbe a far traboccare la riga fuori dallo schermo sui
+       telefoni più stretti. Il gap si aggiunge solo in .search-open,
+       quando il form è davvero visibile e ne ha bisogno */
+    gap: 0;
     flex: 0 0 44px;
     /* senza min-width:0 il floor "automatico" (content-based) di un
        elemento flessibile vince sul flex-basis: 44px non basterebbe a
@@ -798,6 +809,7 @@ main {
     min-width: 0;
     transition: flex 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   }
+  .toolbar.search-open .location-search { gap: 6px; }
   .toolbar.search-open .location-search { flex: 1 1 0; }
 
   /* mode-switch e pulsante filtri si comprimono a zero (non scompaiono di
@@ -845,16 +857,33 @@ main {
      ha comunque spazio disponibile nella riga (il contenitore è largo
      solo quanto il pulsante) quindi resta a larghezza zero */
   .location-search-form {
-    flex: 1 1 0;
-    width: auto;
+    /* grow:0 shrink:0 basis:0, non 1 1 0: a barra chiusa deve restare
+       ESATTAMENTE 0 in ogni caso, non "quasi zero" per via
+       dell'aritmetica flex (che con shrink/grow a 1 può lasciare qualche
+       px residuo) — quei px residui, sommati alle altre righe strette,
+       erano quanto bastava a spingere l'icona di ricerca fuori schermo
+       sui telefoni più piccoli */
+    flex: 0 0 0;
+    overflow: hidden;
     min-width: 0;
+    /* con box-sizing:border-box il padding (ereditato dalla regola
+       desktop) impone comunque un minimo di larghezza pari a
+       padding+bordo anche quando flex-basis è 0 — va azzerato qui e
+       ripristinato solo in .open, altrimenti la barra chiusa resta
+       larga ~20px invece di sparire del tutto */
+    padding: 0;
+    border-width: 0;
     height: 44px;
     opacity: 0;
     transform: translateX(28px);
     pointer-events: none;
-    transition: opacity 0.26s ease, transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 0.26s ease, transform 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+      flex 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .location-search.open .location-search-form {
+    flex: 1 1 0;
+    padding: 0 var(--sp-2) 0 10px;
+    border-width: 1px;
     opacity: 1;
     transform: translateX(0);
     pointer-events: auto;
@@ -929,27 +958,35 @@ main {
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
 
-  /* più compatta: la mappa deve restare l'elemento principale, questa è
-     solo una scala di riferimento sempre visibile, non serve occupi
-     tanto spazio quanto la mappa stessa */
+  /* piccolo badge in basso a destra, non più una barra a tutta
+     larghezza: la mappa deve restare l'elemento principale. Ancorato dal
+     basso (bottom fisso): quando si apre la spiegazione col pulsante "i"
+     cresce verso l'alto, non copre altro spazio della mappa ai lati */
   .legend {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: auto;
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom));
+    left: auto;
+    right: calc(var(--sp-2) + env(safe-area-inset-right));
+    bottom: calc(var(--sp-2) + env(safe-area-inset-bottom));
+    width: 172px;
+    max-height: 62px;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    padding: var(--sp-2) 10px;
     z-index: 1200;
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .legend.open { max-height: calc(100vh - 32px); overflow-y: auto; }
+  .legend.open {
+    width: 220px;
+    max-height: min(60vh, 280px);
+    overflow-y: auto;
+  }
 
   .legend-head { margin-bottom: 6px; }
-  .legend h2 { font-size: 10.5px; }
+  .legend h2 { font-size: 10px; }
   .legend-info { width: 20px; height: 20px; }
   .legend-info svg { width: 13px; height: 13px; }
   .legend .bar { height: 6px; }
-  .legend .labels { margin-top: 5px; font-size: 10px; }
+  .legend .labels { margin-top: 5px; font-size: 9.5px; }
   #legendDesc { font-size: 11.5px; margin-top: var(--sp-2); }
 
   .wx-popup { max-height: min(60vh, 460px); }
