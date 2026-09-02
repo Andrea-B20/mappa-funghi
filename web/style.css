@@ -1155,14 +1155,20 @@ main {
   }
   body.map-3d-active .location-search-toggle { display: none; }
   body.map-3d-active .location-search-form {
-    flex: 0 1 190px;
-    min-width: 140px;
-    padding: 0 var(--sp-2) 0 10px;
+    flex: 0 1 148px;
+    min-width: 110px;
+    height: 38px;
+    padding: 0 8px 0 8px;
     border-width: 1px;
     opacity: 1;
     transform: none;
     pointer-events: auto;
   }
+  /* il testo resta a 16px (non più piccolo): sotto quella soglia iOS
+     Safari zooma automaticamente l'intera pagina al focus del campo */
+  body.map-3d-active .location-search-form .location-search-input { height: 38px; }
+  body.map-3d-active .location-search-icon { width: 13px; height: 13px; }
+  body.map-3d-active .location-search-clear { width: 20px; height: 20px; }
   body.map-3d-active .location-search-results {
     right: 0;
     left: auto;
