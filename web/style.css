@@ -1346,6 +1346,17 @@ main {
 
   .wx-popup { padding: var(--sp-3); }
 
+  /* fisso al centro dello schermo invece che ancorato al punto cliccato:
+     seguendo la mappa durante pan/zoom si spostava e disorientava */
+  .wx-map-popup {
+    position: fixed !important;
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    margin: 0 !important;
+  }
+  .wx-map-popup .maplibregl-popup-tip { display: none; }
+
   .wx-species-row { padding: 10px var(--sp-2); min-height: 44px; font-size: 14px; }
   .wx-species-detail { font-size: 13px; }
 

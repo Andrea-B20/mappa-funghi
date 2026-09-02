@@ -1548,6 +1548,10 @@ window.hideRainTip = function () {
 // l'apertura misuriamo dove è finito davvero il popup e spostiamo la mappa
 // quel tanto che basta perché non resti dietro a quegli elementi.
 function nudgePopupIntoView(popup) {
+  // su smartphone il popup è fisso sullo schermo (vedi .wx-map-popup in
+  // CSS): spostare la mappa qui non serve più e la farebbe solo scorrere
+  // a vuoto sotto un popup che non si muove
+  if (window.matchMedia("(max-width: 720px), (max-height: 480px)").matches) return;
   requestAnimationFrame(() => {
     const el = popup.getElement();
     if (!el) return;
