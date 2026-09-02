@@ -141,6 +141,19 @@ input:focus-visible {
   position: relative;
   z-index: 500;
 }
+/* .topbar crea un proprio contesto di impilamento (position:relative +
+   z-index): qualunque z-index dato a un suo discendente — come il menu a
+   tendina dei risultati di ricerca — vale solo AL SUO INTERNO, non contro
+   gli elementi fuori dall'header (controlli camera, menu tipo di mappa,
+   legenda), che restano sopra pur avendo uno z-index "sulla carta" più
+   basso di quello del menu. Stesso problema già risolto altrove in questo
+   file facendo uscire l'elemento dall'header nel DOM; qui è più semplice
+   alzare l'header stesso, ma solo mentre il menu è aperto, così non
+   altera il resto (es. lo scrim che scurisce l'header quando si apre il
+   foglio dei filtri specie) */
+.topbar:has(.location-search-results:not([hidden])) {
+  z-index: 1400;
+}
 
 .brand {
   display: flex;
@@ -376,7 +389,11 @@ body.map-3d-active #modeSwitch { display: none; }
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  z-index: 10;
+  /* sopra a tutto il resto (controlli camera 1000, menu tipo di mappa
+     1100, legenda 1200 compresi): prima, a 10, quei controlli — più in
+     alto nello stacking — ci si disegnavano sopra pur essendo più in
+     basso sullo schermo */
+  z-index: 1300;
 }
 
 .location-search-result {
