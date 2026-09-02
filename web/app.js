@@ -621,14 +621,8 @@ function setupMapControls() {
   compass.addEventListener("pointercancel", endCompassDrag);
 
   const tiltRange = document.getElementById("tiltRange");
-  const tiltValue = document.getElementById("tiltValue");
-  const showTilt = (deg) => {
-    tiltRange.value = String(deg);
-    tiltValue.textContent = deg + "°";
-  };
   tiltRange.addEventListener("input", () => {
     tiltDegrees = Number(tiltRange.value);
-    tiltValue.textContent = tiltDegrees + "°";
     if (mapType === "3d") map.setPitch(tiltDegrees);
   });
   // l'inclinazione si può cambiare anche col gesto a due dita: teniamo lo
@@ -636,9 +630,9 @@ function setupMapControls() {
   map.on("pitch", () => {
     if (mapType !== "3d") return;
     tiltDegrees = Math.round(map.getPitch());
-    showTilt(tiltDegrees);
+    tiltRange.value = String(tiltDegrees);
   });
-  showTilt(tiltDegrees);
+  tiltRange.value = String(tiltDegrees);
 }
 setupMapControls();
 
