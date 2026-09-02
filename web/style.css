@@ -452,8 +452,9 @@ main {
 /* il popup del motore mappa non ha uno z-index proprio (resta su "auto"),
    quindi la heatmap — che invece ce l'ha esplicito — gli si disegnava
    sopra anche stando prima nel DOM: la scheda del meteo finiva velata
-   dalle zone colorate. 3 perché i controlli della mappa stanno già a 2 */
-.maplibregl-popup { z-index: 3; }
+   dalle zone colorate. Deve stare sopra anche a bussola/zoom/inclinazione
+   (1000), menu mappa (1100) e legenda (1200) */
+.maplibregl-popup { z-index: 1500; }
 
 .maplibregl-popup-content {
   background: var(--surface) !important;
