@@ -421,6 +421,35 @@ main {
 .leaflet-control-attribution a { color: var(--text-muted) !important; }
 
 /* ---------------------------------------------------------------------
+   Layer toggle (stradale / satellite)
+--------------------------------------------------------------------- */
+.layer-toggle {
+  position: absolute;
+  right: var(--sp-5);
+  bottom: var(--sp-5);
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  box-shadow: var(--shadow-md);
+  z-index: 1100;
+  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease,
+    color 0.15s ease, border-color 0.15s ease;
+}
+.layer-toggle svg { width: 20px; height: 20px; }
+.layer-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+.layer-toggle[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------
    Legend card
 --------------------------------------------------------------------- */
 .legend {
@@ -972,6 +1001,14 @@ main {
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
+
+  .layer-toggle {
+    position: fixed;
+    right: calc(var(--sp-2) + env(safe-area-inset-right));
+    width: 40px;
+    height: 40px;
+  }
+  .layer-toggle svg { width: 18px; height: 18px; }
 
   /* piccolo badge in basso a destra, non più una barra a tutta
      larghezza: la mappa deve restare l'elemento principale. Ancorato dal

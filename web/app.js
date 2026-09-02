@@ -344,10 +344,77 @@ L.control.zoom({ position: "topright" }).addTo(map);
 // in basso a sinistra: l'angolo opposto rispetto al badge "Probabilità
 // stimata" (in basso a destra), così i crediti non ci finiscono mai dietro
 map.attributionControl.setPosition("bottomleft");
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+
+// Due sfondi selezionabili in stile Google Maps: stradale (OpenStreetMap,
+// come finora) e satellite ibrido (foto aerea + confini/nomi di città e
+// strade sovrapposti, per restare leggibile). Esri World Imagery è
+// l'unico servizio satellitare gratuito senza chiave API adatto a un
+// sito statico come questo — stesso criterio già usato per il geocoding
+// della ricerca località (Nominatim).
+const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors",
   maxZoom: 18,
-}).addTo(map);
+});
+const satelliteLayer = L.layerGroup([
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    {
+      attribution:
+        "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+      maxZoom: 18,
+    }
+  ),
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 18 }
+  ),
+]);
+
+const BASE_LAYER_STORAGE_KEY = "mappaFunghi.baseLayer";
+let baseLayerName = localStorage.getItem(BASE_LAYER_STORAGE_KEY) === "satellite" ? "satellite" : "street";
+
+function setBaseLayer(name) {
+  const next = name === "satellite" ? satelliteLayer : streetLayer;
+  const prev = name === "satellite" ? streetLayer : satelliteLayer;
+  if (map.hasLayer(prev)) map.removeLayer(prev);
+  if (!map.hasLayer(next)) next.addTo(map);
+  baseLayerName = name;
+  localStorage.setItem(BASE_LAYER_STORAGE_KEY, name);
+  const toggle = document.getElementById("layerToggle");
+  if (toggle) {
+    const isSat = name === "satellite";
+    toggle.setAttribute("aria-pressed", String(isSat));
+    toggle.setAttribute("aria-label", isSat ? "Passa a mappa stradale" : "Passa a vista satellite");
+  }
+}
+setBaseLayer(baseLayerName);
+
+document.getElementById("layerToggle").addEventListener("click", () => {
+  setBaseLayer(baseLayerName === "satellite" ? "street" : "satellite");
+});
+
+// Il pulsante satellite vive sopra al badge "Probabilità stimata", nello
+// stesso angolo: la sua altezza cambia (aperto/chiuso, nascosto durante
+// il menu specie), quindi ne misuriamo la posizione reale invece di un
+// valore fisso, che si sarebbe disallineato ad ogni ritocco della legenda.
+function updateLayerToggleOffset() {
+  const legend = document.getElementById("legend");
+  const toggle = document.getElementById("layerToggle");
+  if (!legend || !toggle) return;
+  if (legend.classList.contains("hidden-for-filters")) {
+    toggle.style.visibility = "hidden";
+    return;
+  }
+  toggle.style.visibility = "visible";
+  const gap = 12;
+  const rect = legend.getBoundingClientRect();
+  toggle.style.bottom = window.innerHeight - rect.top + gap + "px";
+}
+window.addEventListener("resize", updateLayerToggleOffset);
+document.getElementById("legend").addEventListener("transitionend", (e) => {
+  if (e.propertyName === "max-height" || e.propertyName === "width") updateLayerToggleOffset();
+});
+updateLayerToggleOffset();
 
 new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
 
@@ -560,12 +627,14 @@ function setupMobileMenus() {
     filtersToggle.setAttribute("aria-expanded", "false");
     scrim.classList.remove("visible");
     legend.classList.remove("hidden-for-filters");
+    updateLayerToggleOffset();
   };
   const openFilters = () => {
     filtersEl.classList.add("open");
     filtersToggle.setAttribute("aria-expanded", "true");
     scrim.classList.add("visible");
     legend.classList.add("hidden-for-filters");
+    updateLayerToggleOffset();
   };
   filtersToggle.addEventListener("click", () => {
     if (filtersEl.classList.contains("open")) closeFilters();
@@ -580,6 +649,10 @@ function setupMobileMenus() {
   legendInfoBtn.addEventListener("click", () => {
     const open = legend.classList.toggle("open");
     legendInfoBtn.setAttribute("aria-expanded", String(open));
+    // su desktop l'apertura è un display toggle istantaneo (nessun
+    // transitionend a cui appoggiarsi come su mobile), quindi va
+    // ricalcolato subito qui
+    updateLayerToggleOffset();
   });
 }
 
