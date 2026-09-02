@@ -345,12 +345,14 @@ L.control.zoom({ position: "topright" }).addTo(map);
 // stimata" (in basso a destra), così i crediti non ci finiscono mai dietro
 map.attributionControl.setPosition("bottomleft");
 
-// Due sfondi selezionabili in stile Google Maps: stradale (OpenStreetMap,
-// come finora) e satellite ibrido (foto aerea + confini/nomi di città e
-// strade sovrapposti, per restare leggibile). Esri World Imagery è
-// l'unico servizio satellitare gratuito senza chiave API adatto a un
-// sito statico come questo — stesso criterio già usato per il geocoding
-// della ricerca località (Nominatim).
+// Tre tipi di mappa selezionabili in stile Google/Apple Maps, raccolti nel
+// menu a comparsa del pulsante in basso a destra: stradale (OpenStreetMap),
+// satellite ibrido (foto aerea + confini/nomi sovrapposti) e rilievo 3D
+// (terreno inclinabile, vedi sotto). I primi due condividono il motore 2D
+// (Leaflet); il terzo usa un motore diverso e un container separato — vedi
+// più sotto. Esri World Imagery è l'unico servizio satellitare gratuito
+// senza chiave API adatto a un sito statico come questo — stesso criterio
+// già usato per il geocoding della ricerca località (Nominatim).
 const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors",
   maxZoom: 18,
@@ -370,45 +372,99 @@ const satelliteLayer = L.layerGroup([
   ),
 ]);
 
-const BASE_LAYER_STORAGE_KEY = "mappaFunghi.baseLayer";
-let baseLayerName = localStorage.getItem(BASE_LAYER_STORAGE_KEY) === "satellite" ? "satellite" : "street";
+const MAP_TYPE_STORAGE_KEY = "mappaFunghi.mapType";
+const MAP_TYPE_LABELS = { street: "Standard", satellite: "Satellite", "3d": "Rilievo 3D" };
+let mapType = ["street", "satellite", "3d"].includes(localStorage.getItem(MAP_TYPE_STORAGE_KEY))
+  ? localStorage.getItem(MAP_TYPE_STORAGE_KEY)
+  : "street";
 
-function setBaseLayer(name) {
-  const next = name === "satellite" ? satelliteLayer : streetLayer;
-  const prev = name === "satellite" ? streetLayer : satelliteLayer;
-  if (map.hasLayer(prev)) map.removeLayer(prev);
-  if (!map.hasLayer(next)) next.addTo(map);
-  baseLayerName = name;
-  localStorage.setItem(BASE_LAYER_STORAGE_KEY, name);
-  const toggle = document.getElementById("layerToggle");
-  if (toggle) {
-    const isSat = name === "satellite";
-    toggle.setAttribute("aria-pressed", String(isSat));
-    toggle.setAttribute("aria-label", isSat ? "Passa a mappa stradale" : "Passa a vista satellite");
+function setMapType(type) {
+  const was3d = mapType === "3d";
+  const is3d = type === "3d";
+
+  if (was3d && !is3d) exit3D();
+
+  if (!is3d) {
+    const next = type === "satellite" ? satelliteLayer : streetLayer;
+    const prev = type === "satellite" ? streetLayer : satelliteLayer;
+    if (map.hasLayer(prev)) map.removeLayer(prev);
+    if (!map.hasLayer(next)) next.addTo(map);
   }
+
+  mapType = type;
+  localStorage.setItem(MAP_TYPE_STORAGE_KEY, type);
+
+  document.querySelectorAll("#layerMenuList button[data-layer]").forEach((btn) => {
+    btn.setAttribute("aria-checked", String(btn.dataset.layer === type));
+  });
+  const toggle = document.getElementById("layerToggle");
+  if (toggle) toggle.setAttribute("aria-label", "Tipo di mappa: " + MAP_TYPE_LABELS[type]);
+
+  if (is3d && !was3d) enter3D();
 }
-setBaseLayer(baseLayerName);
 
-document.getElementById("layerToggle").addEventListener("click", () => {
-  setBaseLayer(baseLayerName === "satellite" ? "street" : "satellite");
-});
+function setupLayerMenu() {
+  const menu = document.getElementById("layerMenu");
+  const toggle = document.getElementById("layerToggle");
+  const list = document.getElementById("layerMenuList");
 
-// Il pulsante satellite vive sopra al badge "Probabilità stimata", nello
-// stesso angolo: la sua altezza cambia (aperto/chiuso, nascosto durante
-// il menu specie), quindi ne misuriamo la posizione reale invece di un
-// valore fisso, che si sarebbe disallineato ad ogni ritocco della legenda.
+  const closeMenu = () => {
+    menu.classList.remove("open");
+    toggle.setAttribute("aria-expanded", "false");
+  };
+  const openMenu = () => {
+    menu.classList.add("open");
+    toggle.setAttribute("aria-expanded", "true");
+  };
+  toggle.addEventListener("click", () => {
+    if (menu.classList.contains("open")) closeMenu();
+    else openMenu();
+  });
+  list.querySelectorAll("button[data-layer]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setMapType(btn.dataset.layer);
+      closeMenu();
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!menu.contains(e.target)) closeMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && menu.classList.contains("open")) closeMenu();
+  });
+}
+setupLayerMenu();
+// il tipo mappa iniziale è "street" finché il DOM/3D non sono pronti: se la
+// preferenza salvata è satellite/3d la applichiamo ora che tutto esiste
+if (mapType !== "street") {
+  const initial = mapType;
+  mapType = "street";
+  setMapType(initial);
+} else {
+  streetLayer.addTo(map);
+}
+
+// Il pulsante vive sopra al badge "Probabilità stimata", nello stesso
+// angolo: la sua altezza cambia (aperto/chiuso, nascosto durante il menu
+// specie), quindi ne misuriamo la posizione reale invece di un valore
+// fisso, che si sarebbe disallineato ad ogni ritocco della legenda. In
+// vista 3D la legenda è nascosta: torniamo alla posizione base da CSS.
 function updateLayerToggleOffset() {
   const legend = document.getElementById("legend");
-  const toggle = document.getElementById("layerToggle");
-  if (!legend || !toggle) return;
+  const menu = document.getElementById("layerMenu");
+  if (!legend || !menu) return;
   if (legend.classList.contains("hidden-for-filters")) {
-    toggle.style.visibility = "hidden";
+    menu.style.visibility = "hidden";
     return;
   }
-  toggle.style.visibility = "visible";
+  menu.style.visibility = "visible";
+  if (getComputedStyle(legend).display === "none") {
+    menu.style.bottom = "";
+    return;
+  }
   const gap = 12;
   const rect = legend.getBoundingClientRect();
-  toggle.style.bottom = window.innerHeight - rect.top + gap + "px";
+  menu.style.bottom = window.innerHeight - rect.top + gap + "px";
 }
 window.addEventListener("resize", updateLayerToggleOffset);
 document.getElementById("legend").addEventListener("transitionend", (e) => {
@@ -417,6 +473,149 @@ document.getElementById("legend").addEventListener("transitionend", (e) => {
 updateLayerToggleOffset();
 
 new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
+
+/* ---------------- Vista rilievo 3D ----------------
+   Terzo tipo di mappa (vedi menu sopra): terreno inclinabile/ruotabile in
+   stile Apple Maps, per valutare pendenza ed esposizione al sole dei
+   versanti. Usa un motore diverso (MapLibre GL, WebGL) dalla mappa 2D
+   principale (Leaflet, raster) perché Leaflet non supporta l'inclinazione
+   della camera — i due motori convivono nello stesso container, mostrati
+   uno alla volta in base al tipo di mappa scelto. Fonti gratuite senza
+   chiave API, stesso criterio già usato per satellite/ricerca: immagini
+   Esri World Imagery (stessa sorgente della vista satellite 2D) ed
+   elevazione dai tile aperti "Terrarium" (progetto Mapzen, ora ospitati
+   pubblicamente su AWS Open Data).
+*/
+const MAP3D_STYLE = {
+  version: 8,
+  sources: {
+    satellite3d: {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      attribution:
+        "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    },
+    labels3d: {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+    },
+    terrain3d: {
+      type: "raster-dem",
+      tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      encoding: "terrarium",
+      maxzoom: 15,
+    },
+  },
+  layers: [
+    { id: "satellite3d", type: "raster", source: "satellite3d" },
+    { id: "labels3d", type: "raster", source: "labels3d" },
+  ],
+  terrain: { source: "terrain3d", exaggeration: 1.5 },
+};
+
+let map3d = null;
+
+function ensureMap3D() {
+  if (map3d) return map3d;
+  const center = map.getCenter();
+  map3d = new maplibregl.Map({
+    container: "map3d",
+    style: MAP3D_STYLE,
+    center: [center.lng, center.lat],
+    zoom: Math.max(map.getZoom(), 9),
+    pitch: 60,
+    maxPitch: 85,
+    attributionControl: false,
+  });
+  map3d.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
+  map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+  map3d.on("click", onMap3DClick);
+  return map3d;
+}
+
+function enter3D() {
+  document.getElementById("map").style.display = "none";
+  document.getElementById("map3d").hidden = false;
+  // il menu del tipo di mappa resta visibile: è l'unico modo per uscire
+  // di nuovo dalla vista 3D. Legenda e filtro specie no, non hanno senso
+  // senza l'heatmap (che qui non viene disegnata)
+  const legend = document.getElementById("legend");
+  if (legend) legend.style.display = "none";
+  const filtersToggle = document.getElementById("filtersToggle");
+  if (filtersToggle) filtersToggle.style.display = "none";
+  const speciesFilters = document.getElementById("filters");
+  if (speciesFilters) speciesFilters.style.display = "none";
+  ensureMap3D();
+  const center = map.getCenter();
+  map3d.jumpTo({ center: [center.lng, center.lat], zoom: Math.max(map.getZoom(), 9) });
+  requestAnimationFrame(() => map3d.resize());
+  updateLayerToggleOffset();
+}
+
+function exit3D() {
+  document.getElementById("map3d").hidden = true;
+  document.getElementById("map").style.display = "";
+  const legend = document.getElementById("legend");
+  if (legend) legend.style.display = "";
+  const filtersToggle = document.getElementById("filtersToggle");
+  if (filtersToggle) filtersToggle.style.display = "";
+  const speciesFilters = document.getElementById("filters");
+  if (speciesFilters) speciesFilters.style.display = "";
+  if (map3d) {
+    const c = map3d.getCenter();
+    map.setView([c.lat, c.lng], Math.round(map3d.getZoom()));
+  }
+  updateLayerToggleOffset();
+  map.invalidateSize();
+  render();
+}
+
+function setPopupHTML(popup, html) {
+  if (typeof popup.setContent === "function") popup.setContent(html);
+  else popup.setHTML(html);
+}
+
+function onMap3DClick(e) {
+  const { lat, lng } = e.lngLat;
+  openSpeciesIdx = null;
+  const popup = new maplibregl.Popup({ className: "wx-maplibre-popup", maxWidth: "320px" })
+    .setLngLat([lng, lat])
+    .setHTML(popupSkeleton(lat, lng))
+    .addTo(map3d);
+  activePopupInstance = popup;
+  lastPopupParams = null;
+
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
+    `&daily=precipitation_sum&hourly=relative_humidity_2m,soil_moisture_0_to_1cm` +
+    `&past_days=16&forecast_days=1&timezone=auto`;
+
+  Promise.all([
+    fetch(url).then((r) => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }),
+    fetchClcVegClass(lat, lng).catch(() => null),
+  ])
+    .then(([data, vegClass]) => {
+      if (popup.isOpen()) {
+        data.vegClass = vegClass;
+        lastPopupParams = { lat, lon: lng, data };
+        setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      if (popup.isOpen()) setPopupHTML(popup, popupError(lat, lng));
+    });
+}
 
 // Layer canvas per la mappa di calore: i punti sono resi come sfumature
 // radiali che si sovrappongono e si fondono (come una vera heatmap), non
@@ -726,7 +925,11 @@ function setupLocationSearch() {
       li.className = "location-search-result";
       li.textContent = shortLocationLabel(r.display_name);
       li.addEventListener("click", () => {
-        map.flyTo([lat, lon], 13, { duration: 1 });
+        if (mapType === "3d" && map3d) {
+          map3d.flyTo({ center: [lon, lat], zoom: 13, duration: 1000 });
+        } else {
+          map.flyTo([lat, lon], 13, { duration: 1 });
+        }
         input.value = shortLocationLabel(r.display_name);
         closeSearch();
       });
@@ -997,6 +1200,9 @@ function drawZones(zones) {
 }
 
 function render() {
+  // la vista rilievo 3D non disegna l'heatmap: nessun dato da preparare
+  if (mapType === "3d") return;
+
   let zones = [];
 
   if (mode === "storico") {
@@ -1200,7 +1406,7 @@ window.toggleSpeciesDetail = function (idx) {
   if (!activePopupInstance || !lastPopupParams) return;
   openSpeciesIdx = openSpeciesIdx === idx ? null : idx;
   const { lat, lon, data } = lastPopupParams;
-  activePopupInstance.setContent(popupContent(lat, lon, data, openSpeciesIdx));
+  setPopupHTML(activePopupInstance, popupContent(lat, lon, data, openSpeciesIdx));
 };
 
 // Hover/tap su una barra del grafico pioggia: legge data/mm direttamente

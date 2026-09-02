@@ -402,11 +402,39 @@ main {
   min-height: 0;
 }
 
-#map {
+#map,
+#map3d {
   position: absolute;
   inset: 0;
   background: var(--canvas);
 }
+#map3d[hidden] { display: none; }
+
+.maplibregl-popup-content {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
+  padding: 0 !important;
+}
+.maplibregl-popup-tip { border-top-color: var(--surface) !important; border-bottom-color: var(--surface) !important; }
+.maplibregl-popup-close-button {
+  color: var(--text-faint) !important;
+  font-size: 18px !important;
+  padding: 4px 8px 0 0 !important;
+}
+.maplibregl-popup-close-button:hover { color: var(--text) !important; background: none !important; }
+.maplibregl-ctrl-attrib { background: rgba(15, 23, 16, 0.75) !important; color: var(--text-faint) !important; }
+.maplibregl-ctrl-attrib a { color: var(--text-muted) !important; }
+.maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(15, 23, 16, 0.75) !important; }
+.maplibregl-ctrl-group {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+}
+.maplibregl-ctrl-group button { background: transparent !important; }
+.maplibregl-ctrl-group button:hover { background: var(--surface-2) !important; }
+.maplibregl-ctrl-icon { filter: invert(1) !important; }
 
 .leaflet-control-zoom a {
   background: var(--surface) !important;
@@ -421,12 +449,17 @@ main {
 .leaflet-control-attribution a { color: var(--text-muted) !important; }
 
 /* ---------------------------------------------------------------------
-   Layer toggle (stradale / satellite)
+   Layer menu (tipo di mappa: standard / satellite / rilievo 3D)
 --------------------------------------------------------------------- */
-.layer-toggle {
+.layer-menu {
   position: absolute;
   right: var(--sp-5);
   bottom: var(--sp-5);
+  z-index: 1100;
+  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.layer-toggle {
   width: 44px;
   height: 44px;
   display: flex;
@@ -437,17 +470,56 @@ main {
   border-radius: 50%;
   color: var(--text-muted);
   box-shadow: var(--shadow-md);
-  z-index: 1100;
-  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease,
-    color 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .layer-toggle svg { width: 20px; height: 20px; }
 .layer-toggle:hover { color: var(--text); border-color: var(--border-strong); }
-.layer-toggle[aria-pressed="true"] {
+.layer-toggle[aria-expanded="true"] {
   color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* elenco a comparsa: ancorato in basso (stessa maniglia del pulsante),
+   cresce verso l'alto invece di scendere sopra la mappa sottostante */
+.layer-menu-list {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 180px;
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transition: max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+.layer-menu.open .layer-menu-list {
+  max-height: 220px;
+  opacity: 1;
+}
+
+.layer-menu-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.layer-menu-list button svg { width: 17px; height: 17px; flex: none; color: var(--text-faint); }
+.layer-menu-list button:hover { background: var(--surface-2); color: var(--text); }
+.layer-menu-list button[aria-checked="true"] { color: var(--text); font-weight: 600; }
+.layer-menu-list button[aria-checked="true"] svg { color: var(--accent); }
+.layer-menu-list li + li button { border-top: 1px solid var(--border); }
 
 /* ---------------------------------------------------------------------
    Legend card
@@ -769,6 +841,8 @@ main {
     flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
+    padding: 2px;
+    gap: 1px;
     transition: flex 0.32s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease;
   }
   .mode-switch button {
@@ -778,8 +852,8 @@ main {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 2px;
-    font-size: 12px;
+    padding: 6px 1px;
+    font-size: 11px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1002,12 +1076,11 @@ main {
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
 
-  .layer-toggle {
+  .layer-menu {
     position: fixed;
     right: calc(var(--sp-2) + env(safe-area-inset-right));
-    width: 40px;
-    height: 40px;
   }
+  .layer-toggle { width: 40px; height: 40px; }
   .layer-toggle svg { width: 18px; height: 18px; }
 
   /* piccolo badge in basso a destra, non più una barra a tutta

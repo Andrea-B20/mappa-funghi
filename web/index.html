@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Domine:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -59,14 +60,37 @@
 
   <main>
     <div id="map"></div>
+    <div id="map3d" hidden></div>
 
-    <button class="layer-toggle" id="layerToggle" type="button" aria-pressed="false" aria-label="Passa a vista satellite">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="m12 3 9 4.5-9 4.5-9-4.5Z" />
-        <path d="m3 12 9 4.5 9-4.5" />
-        <path d="m3 16.5 9 4.5 9-4.5" />
-      </svg>
-    </button>
+    <div class="layer-menu" id="layerMenu">
+      <button class="layer-toggle" id="layerToggle" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Tipo di mappa">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m12 3 9 4.5-9 4.5-9-4.5Z" />
+          <path d="m3 12 9 4.5 9-4.5" />
+          <path d="m3 16.5 9 4.5 9-4.5" />
+        </svg>
+      </button>
+      <ul class="layer-menu-list" id="layerMenuList" role="menu">
+        <li role="none">
+          <button type="button" role="menuitemradio" aria-checked="true" data-layer="street">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3 3 5v16l6-2 6 2 6-2V3l-6 2-6-2Z" /><path d="M9 3v16" /><path d="M15 5v16" /></svg>
+            <span>Standard</span>
+          </button>
+        </li>
+        <li role="none">
+          <button type="button" role="menuitemradio" aria-checked="false" data-layer="satellite">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10.5" r="1.5" /><path d="m21 15-5-5-4 4-3-3-6 6" /></svg>
+            <span>Satellite</span>
+          </button>
+        </li>
+        <li role="none">
+          <button type="button" role="menuitemradio" aria-checked="false" data-layer="3d">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 18 5.5-9 3.5 5 2.5-3 6.5 7Z" /><path d="M3 18h18" /></svg>
+            <span>Rilievo 3D</span>
+          </button>
+        </li>
+      </ul>
+    </div>
 
     <div class="legend" id="legend">
       <div class="legend-head">
@@ -83,6 +107,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
