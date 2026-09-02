@@ -418,6 +418,13 @@ main {
   inset: 0;
   pointer-events: none;
   z-index: 1;
+  /* durante un trascinamento/zoom/rotazione il canvas non viene
+     ridisegnato: solo spostato con una transform che lo fa scorrere
+     insieme al resto della mappa (vedi applyHeatRide in app.js).
+     transform-origin in alto a sinistra perché quella matrice è
+     calcolata assumendo lo stesso punto di riferimento del canvas */
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 /* il popup del motore mappa non ha uno z-index proprio (resta su "auto"),

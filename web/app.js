@@ -681,7 +681,72 @@ function scheduleHeatRedraw() {
   });
 }
 
+// Durante un trascinamento/zoom/rotazione, MapLibre ridisegna la sua scena
+// WebGL a ogni fotogramma (accelerata via GPU): se in parallelo ricalcoliamo
+// da zero l'intera griglia della heatmap a ogni fotogramma, il ricalcolo
+// (851 zone, tutte proiettate e sommate su una griglia) compete sul thread
+// principale e la quantizzazione della griglia rada (CELL px) cade su
+// pixel leggermente diversi a ogni fotogramma: il risultato è lo
+// "sfarfallio"/vibrazione dei colori osservato, oltre a un movimento meno
+// fluido. La stessa mappa in versione Leaflet non aveva questo problema
+// perché durante il trascinamento non ricalcolava affatto: lasciava
+// scorrere l'immagine già disegnata insieme al resto della mappa.
+//
+// Replichiamo lo stesso comportamento: durante il gesto il canvas non
+// viene ridisegnato, solo trasformato via CSS (transform) in modo che
+// segua esattamente il movimento della mappa sotto di lui — costo quasi
+// nullo, nessun ricalcolo. Il ricalcolo vero, ad alta definizione, avviene
+// solo a gesto concluso ("moveend"), quando il movimento si è già fermato.
+let heatRideRef = null;
+
+function captureHeatRideRef() {
+  const w = heatCanvas.width;
+  const h = heatCanvas.height;
+  if (w === 0 || h === 0) {
+    heatRideRef = null;
+    return;
+  }
+  const corners = [
+    [0, 0],
+    [w, 0],
+    [0, h],
+  ];
+  heatRideRef = {
+    w,
+    h,
+    lngLats: corners.map(([x, y]) => {
+      const ll = map.unproject([x, y]);
+      return [ll.lng, ll.lat];
+    }),
+  };
+}
+
+function applyHeatRide() {
+  if (!heatRideRef) return;
+  const [d0, d1, d2] = heatRideRef.lngLats.map((ll) => map.project(ll));
+  const { w, h } = heatRideRef;
+  // (0,0)->d0, (w,0)->d1, (0,h)->d2: risolvendo x'=a·x+c·y+e, y'=b·x+d·y+f
+  // per queste tre corrispondenze si ottiene direttamente, senza inversioni
+  const e = d0.x;
+  const f = d0.y;
+  const a = (d1.x - e) / w;
+  const b = (d1.y - f) / w;
+  const c = (d2.x - e) / h;
+  const d = (d2.y - f) / h;
+  heatCanvas.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`;
+}
+
+function resetHeatRide() {
+  heatRideRef = null;
+  heatCanvas.style.transform = "";
+}
+
 function drawHeatCanvas() {
+  // qualunque ridisegno vero e proprio invalida il "passaggio" via
+  // transform CSS lasciato da un eventuale gesto in corso: il contenuto
+  // che stiamo per disegnare è già alla posizione/risoluzione corrette
+  heatRideRef = null;
+  heatCanvas.style.transform = "";
   const ctx = heatCanvas.getContext("2d");
   const w = heatCanvas.width;
   const h = heatCanvas.height;
@@ -767,7 +832,14 @@ function drawHeatCanvas() {
   ctx.drawImage(small, 0, 0, gw, gh, 0, 0, w, h);
 }
 
-map.on("move", scheduleHeatRedraw);
+// "movestart"/"move"/"moveend" coprono insieme trascinamento, zoom,
+// rotazione e inclinazione: qualunque cambiamento della camera
+map.on("movestart", captureHeatRideRef);
+map.on("move", applyHeatRide);
+map.on("moveend", () => {
+  resetHeatRide();
+  drawHeatCanvas();
+});
 resizeHeatCanvas();
 
 let occurrences = [];
