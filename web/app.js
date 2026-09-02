@@ -608,7 +608,15 @@ function setupMapControls() {
     dragMoved = false;
     dragStartX = e.clientX;
     dragStartBearing = map.getBearing();
-    compass.setPointerCapture(e.pointerId);
+    // in rari casi limite (timing particolari, dispositivi non standard)
+    // il puntatore può risultare già inattivo qui: non è un errore da
+    // bloccare il gesto, il trascinamento funziona comunque via
+    // pointermove sul documento
+    try {
+      compass.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignorato di proposito, vedi sopra */
+    }
   });
   compass.addEventListener("pointermove", (e) => {
     if (!dragging) return;
@@ -619,7 +627,11 @@ function setupMapControls() {
   const endCompassDrag = (e) => {
     if (!dragging) return;
     dragging = false;
-    if (compass.hasPointerCapture(e.pointerId)) compass.releasePointerCapture(e.pointerId);
+    try {
+      if (compass.hasPointerCapture(e.pointerId)) compass.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignorato di proposito, vedi sopra */
+    }
     if (!dragMoved) map.easeTo({ bearing: 0, duration: 400 });
   };
   compass.addEventListener("pointerup", endCompassDrag);

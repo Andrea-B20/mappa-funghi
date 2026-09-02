@@ -688,10 +688,10 @@ main {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: var(--sp-4);
-  /* sopra ai controlli di Leaflet (z-index 1000 di default, incluso
-     l'attribution "Leaflet | OpenStreetMap contributors" in basso a
-     destra): altrimenti quel testo si sovrappone alle etichette della
-     legenda, che occupa lo stesso angolo */
+  /* sopra ai controlli della mappa (zoom/bussola/inclinazione, z-index
+     1000) e al menu del tipo di mappa (1100): altrimenti si
+     sovrapporrebbero alle etichette della legenda, che occupa lo stesso
+     angolo in basso a destra */
   z-index: 1200;
 }
 
