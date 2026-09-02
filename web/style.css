@@ -479,6 +479,30 @@ main {
 .maplibregl-ctrl-attrib a { color: var(--text-muted) !important; }
 .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(15, 23, 16, 0.75) !important; }
 .maplibregl-ctrl-attrib-button { filter: invert(1); }
+/* aperti, i crediti crescerebbero in orizzontale sopra la legenda (stesso
+   angolo in basso): li facciamo galleggiare sopra al pulsante "i" invece
+   che di fianco, larghezza limitata e testo che va a capo, così restano
+   dentro alla mappa invece di invadere l'angolo opposto */
+.maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-inner {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  max-width: 200px;
+  white-space: normal;
+  background: rgba(15, 23, 16, 0.92) !important;
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  box-shadow: var(--shadow-md);
+}
+/* .maplibregl-ctrl-bottom-left crea un proprio contesto di impilamento
+   (position:absolute + z-index:2 dalla libreria): senza questo, i
+   crediti aperti restano "intrappolati" sotto la legenda (z-index 1200)
+   anche se il loro elemento interno ha uno z-index più alto — stesso
+   problema del dropdown di ricerca, vedi .topbar:has(...) più sopra.
+   Alzato solo mentre sono aperti, per non alterare lo stacking normale */
+.maplibregl-ctrl-bottom-left:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) {
+  z-index: 1250;
+}
 
 /* ---------------------------------------------------------------------
    Controlli camera: zoom a pillola, bussola, inclinazione

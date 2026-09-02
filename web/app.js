@@ -417,6 +417,22 @@ const map = new maplibregl.Map({
 // in basso a sinistra: l'angolo opposto rispetto al badge "Probabilità
 // stimata" (in basso a destra), così i crediti non ci finiscono mai dietro
 map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
+// la libreria apre da sola i crediti (testo esteso) al primo render;
+// li richiudiamo una sola volta così la pagina si carica con la sola
+// "i", senza scritte. Dopo questa prima apertura automatica il pulsante
+// non si riapre più da solo (vedi _updateCompact di MapLibre), quindi
+// l'observer può fermarsi al primo intervento senza interferire con i
+// click dell'utente sul pulsante "i"
+const attribEl = document.querySelector(".maplibregl-ctrl-attrib");
+if (attribEl) {
+  const closeAttribOnce = () => {
+    attribEl.removeAttribute("open");
+    attribEl.classList.remove("maplibregl-compact-show");
+    attribObserver.disconnect();
+  };
+  const attribObserver = new MutationObserver(closeAttribOnce);
+  attribObserver.observe(attribEl, { attributes: true, attributeFilter: ["open"] });
+}
 map.dragRotate.enable();
 map.touchZoomRotate.enable();
 // due dita che ruotano una rispetto all'altra = rotazione della mappa
