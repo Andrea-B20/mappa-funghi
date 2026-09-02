@@ -480,6 +480,11 @@ function setMapType(type) {
 
   if (mapStyleReady) applyMapTypeSources(type);
 
+  // guida il resto della UI specifica del 3D via CSS (badge modalità
+  // nascosto, nome del sito al loro posto su mobile, bussola sempre
+  // visibile anche a nord in alto) — vedi le regole "body.map-3d-active"
+  document.body.classList.toggle("map-3d-active", is3d);
+
   // legenda, filtro specie e heatmap descrivono i dati sui funghi: nel
   // rilievo 3D non vengono disegnati (la vista serve a leggere pendenza
   // ed esposizione dei versanti), quindi lì spariscono anche i controlli

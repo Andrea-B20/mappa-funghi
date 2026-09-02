@@ -211,6 +211,11 @@ input:focus-visible {
   color: var(--accent-ink);
 }
 
+/* Storico/Meteo/Combinato pilotano l'heatmap sui dati storici: nel
+   rilievo 3D l'heatmap non c'è (la vista serve a leggere pendenza ed
+   esposizione dei versanti), quindi il badge non ha nulla da pilotare */
+body.map-3d-active #modeSwitch { display: none; }
+
 /* barra dei filtri specie: una sezione propria, larga quanto la pagina e
    con lo stesso respiro orizzontale dell'header sopra — non una fila di
    chip nudi lasciati cadere sul canvas della mappa. Su schermi stretti
@@ -937,6 +942,9 @@ main {
   /* il nome resta nell'head <title>/nell'app store, non serve occupare
      spazio prezioso in cima allo schermo su un telefono */
   .brand h1 { display: none; }
+  /* ...tranne nel rilievo 3D: lì il badge Storico/Meteo/Combinato sparisce
+     (vedi sopra) e altrimenti quella riga resterebbe con la sola icona */
+  body.map-3d-active .brand h1 { display: block; font-size: 17px; }
 
   .toolbar { gap: var(--sp-2); flex-wrap: nowrap; }
 
@@ -1193,6 +1201,7 @@ main {
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
+  body.map-3d-active .brand h1 { display: block; }
 
   .layer-menu {
     position: fixed;
@@ -1247,6 +1256,10 @@ main {
   /* la bussola compare solo a mappa girata, per non affollare lo schermo:
      la rotazione su smartphone si fa con due dita */
   .map-controls:not(.is-rotated) .compass-btn { display: none; }
+  /* ...tranne nel rilievo 3D, dove resta sempre visibile sopra allo slider
+     di inclinazione: lì la rotazione è un comando centrale della vista,
+     non un'eccezione da segnalare solo quando già in uso */
+  body.map-3d-active .map-controls .compass-btn { display: flex; }
   .tilt-range { height: 132px; }
 
   /* popup meteo: usa più larghezza disponibile e ingrandisce i bersagli
