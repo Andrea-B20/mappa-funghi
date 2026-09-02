@@ -1142,6 +1142,32 @@ main {
     min-width: 0;
   }
 
+  /* nel rilievo 3D il badge modalità e il filtro specie sono già
+     nascosti (vedi "body.map-3d-active" più sopra): con lo spazio
+     libero non serve più il pulsante a icona che si espande, la barra
+     di ricerca sta comoda sempre aperta come su desktop. Va solo
+     spinta a destra esplicitamente: prima ci pensava mode-switch
+     (l'unico figlio della toolbar con flex-grow), che qui è assente */
+  body.map-3d-active .location-search {
+    margin-left: auto;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  body.map-3d-active .location-search-toggle { display: none; }
+  body.map-3d-active .location-search-form {
+    flex: 0 1 190px;
+    min-width: 140px;
+    padding: 0 var(--sp-2) 0 10px;
+    border-width: 1px;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+  body.map-3d-active .location-search-results {
+    right: 0;
+    left: auto;
+  }
+
   .filters-scrim.visible {
     display: block;
     position: fixed;
