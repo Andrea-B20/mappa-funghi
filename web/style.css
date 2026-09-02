@@ -141,6 +141,19 @@ input:focus-visible {
   position: relative;
   z-index: 500;
 }
+/* .topbar crea un proprio contesto di impilamento (position:relative +
+   z-index): qualunque z-index dato a un suo discendente — come il menu a
+   tendina dei risultati di ricerca — vale solo AL SUO INTERNO, non contro
+   gli elementi fuori dall'header (controlli camera, menu tipo di mappa,
+   legenda), che restano sopra pur avendo uno z-index "sulla carta" più
+   basso di quello del menu. Stesso problema già risolto altrove in questo
+   file facendo uscire l'elemento dall'header nel DOM; qui è più semplice
+   alzare l'header stesso, ma solo mentre il menu è aperto, così non
+   altera il resto (es. lo scrim che scurisce l'header quando si apre il
+   foglio dei filtri specie) */
+.topbar:has(.location-search-results:not([hidden])) {
+  z-index: 1400;
+}
 
 .brand {
   display: flex;
@@ -210,6 +223,11 @@ input:focus-visible {
   background: var(--accent);
   color: var(--accent-ink);
 }
+
+/* Storico/Meteo/Combinato pilotano l'heatmap sui dati storici: nel
+   rilievo 3D l'heatmap non c'è (la vista serve a leggere pendenza ed
+   esposizione dei versanti), quindi il badge non ha nulla da pilotare */
+body.map-3d-active #modeSwitch { display: none; }
 
 /* barra dei filtri specie: una sezione propria, larga quanto la pagina e
    con lo stesso respiro orizzontale dell'header sopra — non una fila di
@@ -371,7 +389,11 @@ input:focus-visible {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  z-index: 10;
+  /* sopra a tutto il resto (controlli camera 1000, menu tipo di mappa
+     1100, legenda 1200 compresi): prima, a 10, quei controlli — più in
+     alto nello stacking — ci si disegnavano sopra pur essendo più in
+     basso sullo schermo */
+  z-index: 1300;
 }
 
 .location-search-result {
@@ -406,27 +428,103 @@ main {
   position: absolute;
   inset: 0;
   background: var(--canvas);
+  /* i gesti (trascina, pinch, due dita per ruotare) li interpreta il motore
+     mappa: il browser non deve intercettarli per scroll o zoom di pagina */
+  touch-action: none;
 }
 
-.leaflet-control-zoom a {
+/* heatmap: canvas sovrapposto al motore mappa, puramente decorativo —
+   i click devono arrivare alla mappa sotto */
+.heat-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  /* durante un trascinamento/zoom/rotazione il canvas non viene
+     ridisegnato: solo spostato con una transform che lo fa scorrere
+     insieme al resto della mappa (vedi applyHeatRide in app.js).
+     transform-origin in alto a sinistra perché quella matrice è
+     calcolata assumendo lo stesso punto di riferimento del canvas */
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* il popup del motore mappa non ha uno z-index proprio (resta su "auto"),
+   quindi la heatmap — che invece ce l'ha esplicito — gli si disegnava
+   sopra anche stando prima nel DOM: la scheda del meteo finiva velata
+   dalle zone colorate. 3 perché i controlli della mappa stanno già a 2 */
+.maplibregl-popup { z-index: 3; }
+
+.maplibregl-popup-content {
   background: var(--surface) !important;
   color: var(--text) !important;
-  border-color: var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
+  border: 1px solid var(--border-strong) !important;
+  padding: 0 !important;
 }
-.leaflet-control-zoom a:hover { background: var(--surface-2) !important; }
-.leaflet-control-attribution {
-  background: rgba(15, 23, 16, 0.75) !important;
+.maplibregl-popup-tip {
+  border-top-color: var(--surface) !important;
+  border-bottom-color: var(--surface) !important;
+}
+.maplibregl-popup-close-button {
   color: var(--text-faint) !important;
+  font-size: 20px !important;
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
 }
-.leaflet-control-attribution a { color: var(--text-muted) !important; }
+.maplibregl-popup-close-button:hover { color: var(--text) !important; background: none !important; }
+.maplibregl-ctrl-attrib { background: rgba(15, 23, 16, 0.75) !important; color: var(--text-faint) !important; }
+.maplibregl-ctrl-attrib a { color: var(--text-muted) !important; }
+.maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(15, 23, 16, 0.75) !important; }
+.maplibregl-ctrl-attrib-button { filter: invert(1); }
 
 /* ---------------------------------------------------------------------
-   Layer toggle (stradale / satellite)
+   Controlli camera: zoom a pillola, bussola, inclinazione
 --------------------------------------------------------------------- */
-.layer-toggle {
+.map-controls {
   position: absolute;
-  right: var(--sp-5);
-  bottom: var(--sp-5);
+  top: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* un unico controllo allungato con i due comandi affiancati in verticale,
+   invece di due pulsanti quadrati staccati */
+.zoom-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.zoom-pill button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.zoom-pill button:hover { background: var(--surface-2); color: var(--text); }
+.zoom-pill button:active { background: var(--surface-3); }
+.zoom-pill svg { width: 20px; height: 20px; }
+.zoom-pill-sep {
+  height: 1px;
+  margin: 0 10px;
+  background: var(--border);
+}
+
+.compass-btn {
   width: 44px;
   height: 44px;
   display: flex;
@@ -437,17 +535,145 @@ main {
   border-radius: 50%;
   color: var(--text-muted);
   box-shadow: var(--shadow-md);
+  touch-action: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.compass-btn:hover { background: var(--surface-2); color: var(--text); }
+.compass-btn svg { width: 22px; height: 22px; display: block; }
+/* la punta rossa indica il nord solo quando la mappa è girata: a nord in
+   alto la bussola resta neutra e non attira l'occhio */
+.map-controls.is-rotated .compass-btn { color: var(--sp-ovolo); border-color: var(--border-strong); }
+
+.tilt-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+}
+.tilt-control[hidden] { display: none; }
+
+/* slider verticale che cresce dal basso verso l'alto: writing-mode è la
+   via standard, -webkit-appearance il fallback per Safari */
+.tilt-range {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  width: 22px;
+  height: 108px;
+  margin: 0;
+  background: transparent;
+  /* in verticale i browser rendono lo slider col proprio stile nativo e
+     ignorano gran parte dei pseudo-elementi: accent-color è la via che
+     funziona ovunque per portarlo nella palette del sito */
+  accent-color: var(--accent);
+  touch-action: none;
+  cursor: pointer;
+}
+.tilt-range::-webkit-slider-runnable-track {
+  width: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+}
+.tilt-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+}
+.tilt-range::-moz-range-track {
+  width: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+}
+.tilt-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------------------------
+   Layer menu (tipo di mappa: standard / satellite / rilievo 3D)
+--------------------------------------------------------------------- */
+.layer-menu {
+  position: absolute;
+  right: var(--sp-5);
+  bottom: var(--sp-5);
   z-index: 1100;
-  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease,
-    color 0.15s ease, border-color 0.15s ease;
+  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.layer-toggle {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  box-shadow: var(--shadow-md);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .layer-toggle svg { width: 20px; height: 20px; }
 .layer-toggle:hover { color: var(--text); border-color: var(--border-strong); }
-.layer-toggle[aria-pressed="true"] {
+.layer-toggle[aria-expanded="true"] {
   color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* elenco a comparsa: ancorato in basso (stessa maniglia del pulsante),
+   cresce verso l'alto invece di scendere sopra la mappa sottostante */
+.layer-menu-list {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 180px;
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transition: max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+.layer-menu.open .layer-menu-list {
+  max-height: 220px;
+  opacity: 1;
+}
+
+.layer-menu-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.layer-menu-list button svg { width: 17px; height: 17px; flex: none; color: var(--text-faint); }
+.layer-menu-list button:hover { background: var(--surface-2); color: var(--text); }
+.layer-menu-list button[aria-checked="true"] { color: var(--text); font-weight: 600; }
+.layer-menu-list button[aria-checked="true"] svg { color: var(--accent); }
+.layer-menu-list li + li button { border-top: 1px solid var(--border); }
 
 /* ---------------------------------------------------------------------
    Legend card
@@ -462,10 +688,10 @@ main {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: var(--sp-4);
-  /* sopra ai controlli di Leaflet (z-index 1000 di default, incluso
-     l'attribution "Leaflet | OpenStreetMap contributors" in basso a
-     destra): altrimenti quel testo si sovrappone alle etichette della
-     legenda, che occupa lo stesso angolo */
+  /* sopra ai controlli della mappa (zoom/bussola/inclinazione, z-index
+     1000) e al menu del tipo di mappa (1100): altrimenti si
+     sovrapporrebbero alle etichette della legenda, che occupa lo stesso
+     angolo in basso a destra */
   z-index: 1200;
 }
 
@@ -540,21 +766,7 @@ main {
 /* ---------------------------------------------------------------------
    Weather popup (click-to-inspect)
 --------------------------------------------------------------------- */
-.leaflet-popup-content-wrapper {
-  background: var(--surface);
-  color: var(--text);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border-strong);
-}
-.leaflet-popup-tip { background: var(--surface); box-shadow: none; border: 1px solid var(--border-strong); }
-.leaflet-popup-content { margin: 0; width: min(280px, calc(100vw - 56px)) !important; }
-.leaflet-popup-close-button {
-  color: var(--text-faint) !important;
-  font-size: 18px !important;
-  padding: 6px 8px 0 0 !important;
-}
-.leaflet-popup-close-button:hover { color: var(--text) !important; }
+.maplibregl-popup-content { width: min(300px, calc(100vw - 40px)); }
 
 .wx-popup {
   padding: var(--sp-4);
@@ -747,6 +959,9 @@ main {
   /* il nome resta nell'head <title>/nell'app store, non serve occupare
      spazio prezioso in cima allo schermo su un telefono */
   .brand h1 { display: none; }
+  /* ...tranne nel rilievo 3D: lì il badge Storico/Meteo/Combinato sparisce
+     (vedi sopra) e altrimenti quella riga resterebbe con la sola icona */
+  body.map-3d-active .brand h1 { display: block; font-size: 17px; }
 
   .toolbar { gap: var(--sp-2); flex-wrap: nowrap; }
 
@@ -769,6 +984,8 @@ main {
     flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
+    padding: 2px;
+    gap: 1px;
     transition: flex 0.32s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease;
   }
   .mode-switch button {
@@ -778,8 +995,8 @@ main {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 2px;
-    font-size: 12px;
+    padding: 6px 1px;
+    font-size: 11px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -942,6 +1159,38 @@ main {
     min-width: 0;
   }
 
+  /* nel rilievo 3D il badge modalità e il filtro specie sono già
+     nascosti (vedi "body.map-3d-active" più sopra): con lo spazio
+     libero non serve più il pulsante a icona che si espande, la barra
+     di ricerca sta comoda sempre aperta come su desktop. Va solo
+     spinta a destra esplicitamente: prima ci pensava mode-switch
+     (l'unico figlio della toolbar con flex-grow), che qui è assente */
+  body.map-3d-active .location-search {
+    margin-left: auto;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  body.map-3d-active .location-search-toggle { display: none; }
+  body.map-3d-active .location-search-form {
+    flex: 0 1 148px;
+    min-width: 110px;
+    height: 38px;
+    padding: 0 8px 0 8px;
+    border-width: 1px;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+  /* il testo resta a 16px (non più piccolo): sotto quella soglia iOS
+     Safari zooma automaticamente l'intera pagina al focus del campo */
+  body.map-3d-active .location-search-form .location-search-input { height: 38px; }
+  body.map-3d-active .location-search-icon { width: 13px; height: 13px; }
+  body.map-3d-active .location-search-clear { width: 20px; height: 20px; }
+  body.map-3d-active .location-search-results {
+    right: 0;
+    left: auto;
+  }
+
   .filters-scrim.visible {
     display: block;
     position: fixed;
@@ -1001,13 +1250,13 @@ main {
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
+  body.map-3d-active .brand h1 { display: block; }
 
-  .layer-toggle {
+  .layer-menu {
     position: fixed;
     right: calc(var(--sp-2) + env(safe-area-inset-right));
-    width: 40px;
-    height: 40px;
   }
+  .layer-toggle { width: 40px; height: 40px; }
   .layer-toggle svg { width: 18px; height: 18px; }
 
   /* piccolo badge in basso a destra, non più una barra a tutta
@@ -1045,19 +1294,30 @@ main {
   /* su mobile il pinch/doppio-tap sulla mappa basta e avanza (i due
      pulsanti +/- occupano spazio utile e sono un target minuscolo da
      toccare con un dito) */
-  .leaflet-control-zoom { display: none; }
+  /* lo zoom si fa col pinch: la pillola occuperebbe spazio utile e
+     sarebbe comunque un bersaglio scomodo su schermo piccolo. Bussola e
+     inclinazione restano, sono i comandi che il gesto da solo non copre
+     in modo evidente */
+  .zoom-pill { display: none; }
+  .map-controls { top: var(--sp-3); right: var(--sp-3); gap: 6px; }
+  .compass-btn { width: 40px; height: 40px; }
+  .compass-btn svg { width: 20px; height: 20px; }
+  /* la bussola compare solo a mappa girata, per non affollare lo schermo:
+     la rotazione su smartphone si fa con due dita */
+  .map-controls:not(.is-rotated) .compass-btn { display: none; }
+  /* ...tranne nel rilievo 3D, dove resta sempre visibile sopra allo slider
+     di inclinazione: lì la rotazione è un comando centrale della vista,
+     non un'eccezione da segnalare solo quando già in uso */
+  body.map-3d-active .map-controls .compass-btn { display: flex; }
+  .tilt-range { height: 132px; }
 
   /* popup meteo: usa più larghezza disponibile e ingrandisce i bersagli
      tattili (righe specie, chiusura, barre del grafico pioggia) */
-  .leaflet-popup-content { width: min(340px, calc(100vw - 32px)) !important; }
-  .leaflet-popup-close-button {
-    width: 36px !important;
-    height: 36px !important;
-    display: flex !important;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px !important;
-    padding: 0 !important;
+  .maplibregl-popup-content { width: min(340px, calc(100vw - 32px)); }
+  .maplibregl-popup-close-button {
+    width: 38px !important;
+    height: 38px !important;
+    font-size: 22px !important;
   }
 
   .wx-popup { padding: var(--sp-3); }
