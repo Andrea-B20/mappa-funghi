@@ -1305,13 +1305,10 @@ main {
   .map-controls { top: var(--sp-3); right: var(--sp-3); gap: 6px; }
   .compass-btn { width: 40px; height: 40px; }
   .compass-btn svg { width: 20px; height: 20px; }
-  /* la bussola compare solo a mappa girata, per non affollare lo schermo:
-     la rotazione su smartphone si fa con due dita */
-  .map-controls:not(.is-rotated) .compass-btn { display: none; }
-  /* ...tranne nel rilievo 3D, dove resta sempre visibile sopra allo slider
-     di inclinazione: lì la rotazione è un comando centrale della vista,
-     non un'eccezione da segnalare solo quando già in uso */
-  body.map-3d-active .map-controls .compass-btn { display: flex; }
+  /* sempre visibile in tutti e tre i filtri mappa: su smartphone la
+     rotazione si fa con due dita e senza la bussola non c'è modo di
+     vedere l'orientamento o di rimettere il nord in alto con un tocco */
+  .compass-btn { display: flex; }
   .tilt-range { height: 132px; }
 
   /* popup meteo: usa più larghezza disponibile e ingrandisce i bersagli
