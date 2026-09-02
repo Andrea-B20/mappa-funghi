@@ -402,51 +402,177 @@ main {
   min-height: 0;
 }
 
-#map,
-#map3d {
+#map {
   position: absolute;
   inset: 0;
   background: var(--canvas);
+  /* i gesti (trascina, pinch, due dita per ruotare) li interpreta il motore
+     mappa: il browser non deve intercettarli per scroll o zoom di pagina */
+  touch-action: none;
 }
-#map3d[hidden] { display: none; }
+
+/* heatmap: canvas sovrapposto al motore mappa, puramente decorativo —
+   i click devono arrivare alla mappa sotto */
+.heat-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
 
 .maplibregl-popup-content {
   background: var(--surface) !important;
   color: var(--text) !important;
   border-radius: var(--radius-md) !important;
   box-shadow: var(--shadow-lg) !important;
+  border: 1px solid var(--border-strong) !important;
   padding: 0 !important;
 }
-.maplibregl-popup-tip { border-top-color: var(--surface) !important; border-bottom-color: var(--surface) !important; }
+.maplibregl-popup-tip {
+  border-top-color: var(--surface) !important;
+  border-bottom-color: var(--surface) !important;
+}
 .maplibregl-popup-close-button {
   color: var(--text-faint) !important;
-  font-size: 18px !important;
-  padding: 4px 8px 0 0 !important;
+  font-size: 20px !important;
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
 }
 .maplibregl-popup-close-button:hover { color: var(--text) !important; background: none !important; }
 .maplibregl-ctrl-attrib { background: rgba(15, 23, 16, 0.75) !important; color: var(--text-faint) !important; }
 .maplibregl-ctrl-attrib a { color: var(--text-muted) !important; }
 .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(15, 23, 16, 0.75) !important; }
-.maplibregl-ctrl-group {
-  background: var(--surface) !important;
-  border: 1px solid var(--border) !important;
-  box-shadow: none !important;
-}
-.maplibregl-ctrl-group button { background: transparent !important; }
-.maplibregl-ctrl-group button:hover { background: var(--surface-2) !important; }
-.maplibregl-ctrl-icon { filter: invert(1) !important; }
+.maplibregl-ctrl-attrib-button { filter: invert(1); }
 
-.leaflet-control-zoom a {
-  background: var(--surface) !important;
-  color: var(--text) !important;
-  border-color: var(--border) !important;
+/* ---------------------------------------------------------------------
+   Controlli camera: zoom a pillola, bussola, inclinazione
+--------------------------------------------------------------------- */
+.map-controls {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
 }
-.leaflet-control-zoom a:hover { background: var(--surface-2) !important; }
-.leaflet-control-attribution {
-  background: rgba(15, 23, 16, 0.75) !important;
-  color: var(--text-faint) !important;
+
+/* un unico controllo allungato con i due comandi affiancati in verticale,
+   invece di due pulsanti quadrati staccati */
+.zoom-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
 }
-.leaflet-control-attribution a { color: var(--text-muted) !important; }
+.zoom-pill button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.zoom-pill button:hover { background: var(--surface-2); color: var(--text); }
+.zoom-pill button:active { background: var(--surface-3); }
+.zoom-pill svg { width: 20px; height: 20px; }
+.zoom-pill-sep {
+  height: 1px;
+  margin: 0 10px;
+  background: var(--border);
+}
+
+.compass-btn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  box-shadow: var(--shadow-md);
+  touch-action: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.compass-btn:hover { background: var(--surface-2); color: var(--text); }
+.compass-btn svg { width: 22px; height: 22px; display: block; }
+/* la punta rossa indica il nord solo quando la mappa è girata: a nord in
+   alto la bussola resta neutra e non attira l'occhio */
+.map-controls.is-rotated .compass-btn { color: var(--sp-ovolo); border-color: var(--border-strong); }
+
+.tilt-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+}
+.tilt-control[hidden] { display: none; }
+.tilt-value {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* slider verticale che cresce dal basso verso l'alto: writing-mode è la
+   via standard, -webkit-appearance il fallback per Safari */
+.tilt-range {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  width: 22px;
+  height: 108px;
+  margin: 0;
+  background: transparent;
+  /* in verticale i browser rendono lo slider col proprio stile nativo e
+     ignorano gran parte dei pseudo-elementi: accent-color è la via che
+     funziona ovunque per portarlo nella palette del sito */
+  accent-color: var(--accent);
+  touch-action: none;
+  cursor: pointer;
+}
+.tilt-range::-webkit-slider-runnable-track {
+  width: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+}
+.tilt-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+}
+.tilt-range::-moz-range-track {
+  width: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+}
+.tilt-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
 
 /* ---------------------------------------------------------------------
    Layer menu (tipo di mappa: standard / satellite / rilievo 3D)
@@ -612,21 +738,7 @@ main {
 /* ---------------------------------------------------------------------
    Weather popup (click-to-inspect)
 --------------------------------------------------------------------- */
-.leaflet-popup-content-wrapper {
-  background: var(--surface);
-  color: var(--text);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border-strong);
-}
-.leaflet-popup-tip { background: var(--surface); box-shadow: none; border: 1px solid var(--border-strong); }
-.leaflet-popup-content { margin: 0; width: min(280px, calc(100vw - 56px)) !important; }
-.leaflet-popup-close-button {
-  color: var(--text-faint) !important;
-  font-size: 18px !important;
-  padding: 6px 8px 0 0 !important;
-}
-.leaflet-popup-close-button:hover { color: var(--text) !important; }
+.maplibregl-popup-content { width: min(300px, calc(100vw - 40px)); }
 
 .wx-popup {
   padding: var(--sp-4);
@@ -1118,19 +1230,26 @@ main {
   /* su mobile il pinch/doppio-tap sulla mappa basta e avanza (i due
      pulsanti +/- occupano spazio utile e sono un target minuscolo da
      toccare con un dito) */
-  .leaflet-control-zoom { display: none; }
+  /* lo zoom si fa col pinch: la pillola occuperebbe spazio utile e
+     sarebbe comunque un bersaglio scomodo su schermo piccolo. Bussola e
+     inclinazione restano, sono i comandi che il gesto da solo non copre
+     in modo evidente */
+  .zoom-pill { display: none; }
+  .map-controls { top: var(--sp-3); right: var(--sp-3); gap: 6px; }
+  .compass-btn { width: 40px; height: 40px; }
+  .compass-btn svg { width: 20px; height: 20px; }
+  /* la bussola compare solo a mappa girata, per non affollare lo schermo:
+     la rotazione su smartphone si fa con due dita */
+  .map-controls:not(.is-rotated) .compass-btn { display: none; }
+  .tilt-range { height: 132px; }
 
   /* popup meteo: usa più larghezza disponibile e ingrandisce i bersagli
      tattili (righe specie, chiusura, barre del grafico pioggia) */
-  .leaflet-popup-content { width: min(340px, calc(100vw - 32px)) !important; }
-  .leaflet-popup-close-button {
-    width: 36px !important;
-    height: 36px !important;
-    display: flex !important;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px !important;
-    padding: 0 !important;
+  .maplibregl-popup-content { width: min(340px, calc(100vw - 32px)); }
+  .maplibregl-popup-close-button {
+    width: 38px !important;
+    height: 38px !important;
+    font-size: 22px !important;
   }
 
   .wx-popup { padding: var(--sp-3); }

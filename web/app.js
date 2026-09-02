@@ -339,38 +339,90 @@ const COLOR_LUT = (() => {
   return lut;
 })();
 
-const map = L.map("map", { zoomControl: false }).setView([42.3, 12.8], 6);
-L.control.zoom({ position: "topright" }).addTo(map);
+/* ---------------- Motore mappa ----------------
+   Un unico motore (MapLibre GL, WebGL) per tutti e tre i tipi di mappa:
+   stradale, satellite e rilievo 3D. Prima la 2D girava su Leaflet e solo
+   il 3D su MapLibre, ma Leaflet non ha il concetto di "bearing": la
+   rotazione della mappa — che qui serve su tutti i tipi — non era
+   implementabile lì. Con un motore solo, zoom/rotazione/inclinazione si
+   comportano allo stesso modo ovunque e i controlli sono gli stessi.
+
+   Tutte le sorgenti sono gratuite e senza chiave API, stesso criterio già
+   usato per il geocoding della ricerca (Nominatim): OpenStreetMap per lo
+   stradale, Esri World Imagery per il satellite, ed elevazione dai tile
+   aperti "Terrarium" (progetto Mapzen, oggi ospitati su AWS Open Data).
+
+   NB sui livelli di zoom: MapLibre usa tile logici da 512px, Leaflet da
+   256px, quindi lo stesso inquadramento vale un livello in meno qui
+   rispetto ai valori usati in precedenza. */
+const ESRI_ATTRIB =
+  "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community";
+
+const MAP_STYLE = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: [
+        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    },
+    esriImagery: {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: ESRI_ATTRIB,
+    },
+    esriLabels: {
+      type: "raster",
+      tiles: [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      maxzoom: 19,
+    },
+    terrainDem: {
+      type: "raster-dem",
+      tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      encoding: "terrarium",
+      maxzoom: 15,
+    },
+  },
+  layers: [
+    { id: "osm", type: "raster", source: "osm" },
+    { id: "esriImagery", type: "raster", source: "esriImagery", layout: { visibility: "none" } },
+    { id: "esriLabels", type: "raster", source: "esriLabels", layout: { visibility: "none" } },
+  ],
+};
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: MAP_STYLE,
+  center: [12.8, 42.3],
+  zoom: 5,
+  bearing: 0,
+  pitch: 0,
+  maxPitch: 85,
+  attributionControl: false,
+});
 // in basso a sinistra: l'angolo opposto rispetto al badge "Probabilità
 // stimata" (in basso a destra), così i crediti non ci finiscono mai dietro
-map.attributionControl.setPosition("bottomleft");
+map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
+map.dragRotate.enable();
+map.touchZoomRotate.enable();
+// due dita che ruotano una rispetto all'altra = rotazione della mappa
+map.touchZoomRotate.enableRotation();
 
-// Tre tipi di mappa selezionabili in stile Google/Apple Maps, raccolti nel
-// menu a comparsa del pulsante in basso a destra: stradale (OpenStreetMap),
-// satellite ibrido (foto aerea + confini/nomi sovrapposti) e rilievo 3D
-// (terreno inclinabile, vedi sotto). I primi due condividono il motore 2D
-// (Leaflet); il terzo usa un motore diverso e un container separato — vedi
-// più sotto. Esri World Imagery è l'unico servizio satellitare gratuito
-// senza chiave API adatto a un sito statico come questo — stesso criterio
-// già usato per il geocoding della ricerca località (Nominatim).
-const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "&copy; OpenStreetMap contributors",
-  maxZoom: 18,
-});
-const satelliteLayer = L.layerGroup([
-  L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    {
-      attribution:
-        "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
-      maxZoom: 18,
-    }
-  ),
-  L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    { maxZoom: 18 }
-  ),
-]);
+let mapStyleReady = false;
 
 const MAP_TYPE_STORAGE_KEY = "mappaFunghi.mapType";
 const MAP_TYPE_LABELS = { street: "Standard", satellite: "Satellite", "3d": "Rilievo 3D" };
@@ -378,21 +430,71 @@ let mapType = ["street", "satellite", "3d"].includes(localStorage.getItem(MAP_TY
   ? localStorage.getItem(MAP_TYPE_STORAGE_KEY)
   : "street";
 
+// inclinazione corrente scelta con lo slider: ricordata anche quando si
+// esce dal 3D, così rientrando si ritrova l'angolo che si era impostato
+let tiltDegrees = 60;
+
+// Fuori dal rilievo 3D la camera deve restare perfettamente a picco: la
+// heatmap è disegnata in coordinate schermo, e con la vista inclinata i
+// cerchi delle zone si deformerebbero rispetto al terreno. Non basta
+// riportare l'inclinazione a zero, va anche impedita: senza questo si
+// potrebbe comunque inclinare col tasto destro (desktop) o due dita
+// (mobile). maxPitch 0 la blocca alla radice, qualunque sia l'input.
+// Allineiamo guardando la camera reale, non solo la transizione, così il
+// vincolo vale anche all'avvio quando si riapre il sito con una
+// preferenza già salvata.
+function applyPitchForMapType(type, animate) {
+  const is3d = type === "3d";
+  map.setMaxPitch(85);
+  const wanted = is3d ? tiltDegrees : 0;
+  const lockIf2D = () => {
+    if (mapType !== "3d") map.setMaxPitch(0);
+  };
+  if (Math.abs(map.getPitch() - wanted) <= 0.5) {
+    lockIf2D();
+    return;
+  }
+  if (animate) {
+    map.easeTo({ pitch: wanted, duration: 600 });
+    map.once("moveend", lockIf2D);
+  } else {
+    map.jumpTo({ pitch: wanted });
+    lockIf2D();
+  }
+}
+
+function applyMapTypeSources(type) {
+  const is3d = type === "3d";
+  const aerial = is3d || type === "satellite";
+  map.setLayoutProperty("osm", "visibility", aerial ? "none" : "visible");
+  map.setLayoutProperty("esriImagery", "visibility", aerial ? "visible" : "none");
+  map.setLayoutProperty("esriLabels", "visibility", aerial ? "visible" : "none");
+  map.setTerrain(is3d ? { source: "terrainDem", exaggeration: 1.5 } : null);
+}
+
 function setMapType(type) {
   const was3d = mapType === "3d";
   const is3d = type === "3d";
-
-  if (was3d && !is3d) exit3D();
-
-  if (!is3d) {
-    const next = type === "satellite" ? satelliteLayer : streetLayer;
-    const prev = type === "satellite" ? streetLayer : satelliteLayer;
-    if (map.hasLayer(prev)) map.removeLayer(prev);
-    if (!map.hasLayer(next)) next.addTo(map);
-  }
-
   mapType = type;
   localStorage.setItem(MAP_TYPE_STORAGE_KEY, type);
+
+  if (mapStyleReady) applyMapTypeSources(type);
+
+  // legenda, filtro specie e heatmap descrivono i dati sui funghi: nel
+  // rilievo 3D non vengono disegnati (la vista serve a leggere pendenza
+  // ed esposizione dei versanti), quindi lì spariscono anche i controlli
+  const legend = document.getElementById("legend");
+  if (legend) legend.style.display = is3d ? "none" : "";
+  const filtersToggle = document.getElementById("filtersToggle");
+  if (filtersToggle) filtersToggle.style.display = is3d ? "none" : "";
+  const speciesFilters = document.getElementById("filters");
+  if (speciesFilters) speciesFilters.style.display = is3d ? "none" : "";
+  heatCanvas.style.display = is3d ? "none" : "";
+
+  // lo slider di inclinazione ha senso solo dove il terreno ha rilievo
+  const tiltControl = document.getElementById("tiltControl");
+  if (tiltControl) tiltControl.hidden = !is3d;
+  applyPitchForMapType(type, was3d !== is3d);
 
   document.querySelectorAll("#layerMenuList button[data-layer]").forEach((btn) => {
     btn.setAttribute("aria-checked", String(btn.dataset.layer === type));
@@ -400,7 +502,8 @@ function setMapType(type) {
   const toggle = document.getElementById("layerToggle");
   if (toggle) toggle.setAttribute("aria-label", "Tipo di mappa: " + MAP_TYPE_LABELS[type]);
 
-  if (is3d && !was3d) enter3D();
+  updateLayerToggleOffset();
+  if (!is3d) render();
 }
 
 function setupLayerMenu() {
@@ -434,15 +537,6 @@ function setupLayerMenu() {
   });
 }
 setupLayerMenu();
-// il tipo mappa iniziale è "street" finché il DOM/3D non sono pronti: se la
-// preferenza salvata è satellite/3d la applichiamo ora che tutto esiste
-if (mapType !== "street") {
-  const initial = mapType;
-  mapType = "street";
-  setMapType(initial);
-} else {
-  streetLayer.addTo(map);
-}
 
 // Il pulsante vive sopra al badge "Probabilità stimata", nello stesso
 // angolo: la sua altezza cambia (aperto/chiuso, nascosto durante il menu
@@ -472,286 +566,215 @@ document.getElementById("legend").addEventListener("transitionend", (e) => {
 });
 updateLayerToggleOffset();
 
-new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
+new ResizeObserver(() => {
+  map.resize();
+  resizeHeatCanvas();
+  scheduleHeatRedraw();
+}).observe(document.getElementById("map"));
 
-/* ---------------- Vista rilievo 3D ----------------
-   Terzo tipo di mappa (vedi menu sopra): terreno inclinabile/ruotabile in
-   stile Apple Maps, per valutare pendenza ed esposizione al sole dei
-   versanti. Usa un motore diverso (MapLibre GL, WebGL) dalla mappa 2D
-   principale (Leaflet, raster) perché Leaflet non supporta l'inclinazione
-   della camera — i due motori convivono nello stesso container, mostrati
-   uno alla volta in base al tipo di mappa scelto. Fonti gratuite senza
-   chiave API, stesso criterio già usato per satellite/ricerca: immagini
-   Esri World Imagery (stessa sorgente della vista satellite 2D) ed
-   elevazione dai tile aperti "Terrarium" (progetto Mapzen, ora ospitati
-   pubblicamente su AWS Open Data).
-*/
-const MAP3D_STYLE = {
-  version: 8,
-  sources: {
-    satellite3d: {
-      type: "raster",
-      tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      attribution:
-        "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
-    },
-    labels3d: {
-      type: "raster",
-      tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-    },
-    terrain3d: {
-      type: "raster-dem",
-      tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
-      tileSize: 256,
-      encoding: "terrarium",
-      maxzoom: 15,
-    },
-  },
-  layers: [
-    { id: "satellite3d", type: "raster", source: "satellite3d" },
-    { id: "labels3d", type: "raster", source: "labels3d" },
-  ],
-  terrain: { source: "terrain3d", exaggeration: 1.5 },
-};
+/* ---------------- Controlli camera (zoom / rotazione / inclinazione) ---- */
 
-let map3d = null;
+function setupMapControls() {
+  document.getElementById("zoomIn").addEventListener("click", () => map.zoomIn());
+  document.getElementById("zoomOut").addEventListener("click", () => map.zoomOut());
 
-function ensureMap3D() {
-  if (map3d) return map3d;
-  const center = map.getCenter();
-  map3d = new maplibregl.Map({
-    container: "map3d",
-    style: MAP3D_STYLE,
-    center: [center.lng, center.lat],
-    zoom: Math.max(map.getZoom(), 9),
-    pitch: 60,
-    maxPitch: 85,
-    attributionControl: false,
+  const controls = document.getElementById("mapControls");
+  const compass = document.getElementById("compassBtn");
+  const needle = document.getElementById("compassNeedle");
+
+  // l'ago punta sempre al nord reale: ruota in senso opposto alla mappa
+  const syncCompass = () => {
+    const bearing = map.getBearing();
+    needle.style.transform = `rotate(${-bearing}deg)`;
+    controls.classList.toggle("is-rotated", Math.abs(bearing) > 0.5);
+  };
+  map.on("rotate", syncCompass);
+  syncCompass();
+
+  // trascinando la bussola si ruota la mappa con continuità; un tocco
+  // secco (senza trascinare) rimette il nord in alto, come su Google Maps
+  let dragging = false;
+  let dragStartX = 0;
+  let dragStartBearing = 0;
+  let dragMoved = false;
+
+  compass.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    dragMoved = false;
+    dragStartX = e.clientX;
+    dragStartBearing = map.getBearing();
+    compass.setPointerCapture(e.pointerId);
   });
-  map3d.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
-  map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-  map3d.on("click", onMap3DClick);
-  return map3d;
-}
+  compass.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - dragStartX;
+    if (Math.abs(dx) > 3) dragMoved = true;
+    if (dragMoved) map.setBearing(dragStartBearing + dx * 0.8);
+  });
+  const endCompassDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    if (compass.hasPointerCapture(e.pointerId)) compass.releasePointerCapture(e.pointerId);
+    if (!dragMoved) map.easeTo({ bearing: 0, duration: 400 });
+  };
+  compass.addEventListener("pointerup", endCompassDrag);
+  compass.addEventListener("pointercancel", endCompassDrag);
 
-function enter3D() {
-  document.getElementById("map").style.display = "none";
-  document.getElementById("map3d").hidden = false;
-  // il menu del tipo di mappa resta visibile: è l'unico modo per uscire
-  // di nuovo dalla vista 3D. Legenda e filtro specie no, non hanno senso
-  // senza l'heatmap (che qui non viene disegnata)
-  const legend = document.getElementById("legend");
-  if (legend) legend.style.display = "none";
-  const filtersToggle = document.getElementById("filtersToggle");
-  if (filtersToggle) filtersToggle.style.display = "none";
-  const speciesFilters = document.getElementById("filters");
-  if (speciesFilters) speciesFilters.style.display = "none";
-  ensureMap3D();
-  const center = map.getCenter();
-  map3d.jumpTo({ center: [center.lng, center.lat], zoom: Math.max(map.getZoom(), 9) });
-  requestAnimationFrame(() => map3d.resize());
-  updateLayerToggleOffset();
+  const tiltRange = document.getElementById("tiltRange");
+  const tiltValue = document.getElementById("tiltValue");
+  const showTilt = (deg) => {
+    tiltRange.value = String(deg);
+    tiltValue.textContent = deg + "°";
+  };
+  tiltRange.addEventListener("input", () => {
+    tiltDegrees = Number(tiltRange.value);
+    tiltValue.textContent = tiltDegrees + "°";
+    if (mapType === "3d") map.setPitch(tiltDegrees);
+  });
+  // l'inclinazione si può cambiare anche col gesto a due dita: teniamo lo
+  // slider allineato a quello che fa davvero la camera
+  map.on("pitch", () => {
+    if (mapType !== "3d") return;
+    tiltDegrees = Math.round(map.getPitch());
+    showTilt(tiltDegrees);
+  });
+  showTilt(tiltDegrees);
 }
+setupMapControls();
 
-function exit3D() {
-  document.getElementById("map3d").hidden = true;
-  document.getElementById("map").style.display = "";
-  const legend = document.getElementById("legend");
-  if (legend) legend.style.display = "";
-  const filtersToggle = document.getElementById("filtersToggle");
-  if (filtersToggle) filtersToggle.style.display = "";
-  const speciesFilters = document.getElementById("filters");
-  if (speciesFilters) speciesFilters.style.display = "";
-  if (map3d) {
-    const c = map3d.getCenter();
-    map.setView([c.lat, c.lng], Math.round(map3d.getZoom()));
-  }
-  updateLayerToggleOffset();
-  map.invalidateSize();
-  render();
-}
-
+// Il contenuto del popup meteo viene rigenerato per intero ad ogni
+// aggiornamento (vedi toggleSpeciesDetail): unico punto di scrittura.
 function setPopupHTML(popup, html) {
-  if (typeof popup.setContent === "function") popup.setContent(html);
-  else popup.setHTML(html);
+  popup.setHTML(html);
 }
 
-function onMap3DClick(e) {
-  const { lat, lng } = e.lngLat;
-  openSpeciesIdx = null;
-  const popup = new maplibregl.Popup({ className: "wx-maplibre-popup", maxWidth: "320px" })
-    .setLngLat([lng, lat])
-    .setHTML(popupSkeleton(lat, lng))
-    .addTo(map3d);
-  activePopupInstance = popup;
-  lastPopupParams = null;
+/* ---------------- Mappa di calore (overlay canvas) ----------------
+   I punti sono resi come sfumature radiali che si sovrappongono e si
+   fondono (come una vera heatmap), non come cerchi pieni dal bordo netto.
+   Il raggio di ogni zona è un valore reale in metri (vedi zoneRadiusMeters)
+   riconvertito in pixel ad ogni ridisegno in base a zoom e latitudine:
+   le zone occupano sempre la stessa area sul terreno e non si restringono
+   zoomando.
 
-  const url =
-    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
-    `&daily=precipitation_sum&hourly=relative_humidity_2m,soil_moisture_0_to_1cm` +
-    `&past_days=16&forecast_days=1&timezone=auto`;
+   È un canvas sovrapposto alla mappa e ridisegnato in coordinate schermo:
+   con la mappa ruotata resta corretto lo stesso, perché a inclinazione
+   zero un cerchio sul terreno resta un cerchio sullo schermo qualunque sia
+   l'orientamento. Nel rilievo 3D (inclinazione > 0, dove la prospettiva
+   deformerebbe i cerchi) la heatmap non viene disegnata affatto. */
+const heatCanvas = document.createElement("canvas");
+heatCanvas.className = "heat-canvas";
+document.getElementById("map").appendChild(heatCanvas);
 
-  Promise.all([
-    fetch(url).then((r) => {
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
-    }),
-    fetchClcVegClass(lat, lng).catch(() => null),
-  ])
-    .then(([data, vegClass]) => {
-      if (popup.isOpen()) {
-        data.vegClass = vegClass;
-        lastPopupParams = { lat, lon: lng, data };
-        setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
-      }
-    })
-    .catch((err) => {
-      console.error(err);
-      if (popup.isOpen()) setPopupHTML(popup, popupError(lat, lng));
-    });
+let heatZones = [];
+let heatRedrawQueued = false;
+
+function resizeHeatCanvas() {
+  const el = document.getElementById("map");
+  const w = el.clientWidth;
+  const h = el.clientHeight;
+  if (heatCanvas.width !== w) heatCanvas.width = w;
+  if (heatCanvas.height !== h) heatCanvas.height = h;
 }
 
-// Layer canvas per la mappa di calore: i punti sono resi come sfumature
-// radiali che si sovrappongono e si fondono (come una vera heatmap), non
-// come cerchi pieni dal bordo netto. Il raggio è comunque calcolato da un
-// valore reale in metri (vedi zoneRadiusMeters) e riconvertito in pixel a
-// ogni redraw in base a zoom e latitudine: cresce/si rimpicciolisce
-// correttamente con lo zoom invece di restare fisso sullo schermo.
-const HeatCanvasLayer = L.Layer.extend({
-  onAdd(map) {
-    this._map = map;
-    this._canvas = L.DomUtil.create("canvas", "heat-canvas");
-    this._canvas.style.pointerEvents = "none";
-    const size = map.getSize();
-    this._canvas.width = size.x;
-    this._canvas.height = size.y;
-    const animated = map.options.zoomAnimation && L.Browser.any3d;
-    L.DomUtil.addClass(this._canvas, animated ? "leaflet-zoom-animated" : "leaflet-zoom-hide");
-    map.getPanes().overlayPane.appendChild(this._canvas);
-    map.on("moveend resize", this._reset, this);
-    if (animated) map.on("zoomanim", this._animateZoom, this);
-    this._zones = [];
-    this._reset();
-  },
-  onRemove(map) {
-    L.DomUtil.remove(this._canvas);
-    map.off("moveend resize", this._reset, this);
-    map.off("zoomanim", this._animateZoom, this);
-  },
-  setZones(zones) {
-    this._zones = zones;
-    this._redraw();
-  },
-  clearLayers() {
-    this.setZones([]);
-  },
-  _animateZoom(e) {
-    const map = this._map;
-    const scale = map.getZoomScale(e.zoom);
-    const offset = map._latLngBoundsToNewLayerBounds(map.getBounds(), e.zoom, e.center).min;
-    L.DomUtil.setTransform(this._canvas, offset, scale);
-  },
-  _reset() {
-    const map = this._map;
-    const topLeft = map.containerPointToLayerPoint([0, 0]);
-    L.DomUtil.setPosition(this._canvas, topLeft);
-    const size = map.getSize();
-    if (this._canvas.width !== size.x) this._canvas.width = size.x;
-    if (this._canvas.height !== size.y) this._canvas.height = size.y;
-    this._redraw();
-  },
-  _redraw() {
-    const map = this._map;
-    const ctx = this._canvas.getContext("2d");
-    const w = this._canvas.width;
-    const h = this._canvas.height;
-    if (w === 0 || h === 0) return;
-    ctx.clearRect(0, 0, w, h);
-    if (!this._zones || !this._zones.length) return;
+// la mappa emette "move" in continuo durante trascinamento/zoom/rotazione:
+// accodiamo un solo ridisegno per frame invece di uno per evento
+function scheduleHeatRedraw() {
+  if (heatRedrawQueued) return;
+  heatRedrawQueued = true;
+  requestAnimationFrame(() => {
+    heatRedrawQueued = false;
+    drawHeatCanvas();
+  });
+}
 
-    // Il campo di calore è campionato su una griglia di calcolo più rada
-    // (un campione ogni CELL px) invece che pixel per pixel: per ogni
-    // campione si sommano i contributi di TUTTE le zone vicine pesati per
-    // distanza (kernel (1-t²)²), poi si prende la MEDIA pesata dei valori
-    // — non un accumulo di opacità. Così due zone adiacenti coi loro dati
-    // si fondono in un'unica figura continua il cui colore riflette
-    // davvero i dati nel punto, invece di scurirsi artificialmente solo
-    // perché più cerchi si sovrappongono. La griglia rada viene poi
-    // ingrandita con lo smoothing bilineare del canvas, che elimina
-    // qualunque bordo a gradini. L'opacità finale è tenuta sotto un tetto
-    // (MAX_OPACITY) perché la mappa sottostante resti sempre leggibile.
-    const CELL = 4;
-    const gw = Math.ceil(w / CELL);
-    const gh = Math.ceil(h / CELL);
-    const sumW = new Float32Array(gw * gh);
-    const sumWV = new Float32Array(gw * gh);
+function drawHeatCanvas() {
+  const ctx = heatCanvas.getContext("2d");
+  const w = heatCanvas.width;
+  const h = heatCanvas.height;
+  if (w === 0 || h === 0) return;
+  ctx.clearRect(0, 0, w, h);
+  if (mapType === "3d" || !heatZones.length) return;
 
-    const origin = map.containerPointToLayerPoint([0, 0]);
-    for (const z of this._zones) {
-      if (z.value <= 0.03) continue;
-      const p = map.latLngToLayerPoint([z.lat, z.lon]).subtract(origin);
-      const metersPerPixel = (156543.03392804097 * Math.cos((z.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
-      const r = z.r / metersPerPixel;
-      if (p.x + r < 0 || p.x - r > w || p.y + r < 0 || p.y - r > h) continue;
+  // Il campo di calore è campionato su una griglia di calcolo più rada
+  // (un campione ogni CELL px) invece che pixel per pixel: per ogni
+  // campione si sommano i contributi di TUTTE le zone vicine pesati per
+  // distanza (kernel (1-t²)²), poi si prende la MEDIA pesata dei valori
+  // — non un accumulo di opacità. Così due zone adiacenti coi loro dati
+  // si fondono in un'unica figura continua il cui colore riflette
+  // davvero i dati nel punto, invece di scurirsi artificialmente solo
+  // perché più cerchi si sovrappongono. La griglia rada viene poi
+  // ingrandita con lo smoothing bilineare del canvas, che elimina
+  // qualunque bordo a gradini. L'opacità finale è tenuta sotto un tetto
+  // (MAX_OPACITY) perché la mappa sottostante resti sempre leggibile.
+  const CELL = 4;
+  const gw = Math.ceil(w / CELL);
+  const gh = Math.ceil(h / CELL);
+  const sumW = new Float32Array(gw * gh);
+  const sumWV = new Float32Array(gw * gh);
 
-      const gx0 = Math.max(0, Math.floor((p.x - r) / CELL));
-      const gx1 = Math.min(gw - 1, Math.ceil((p.x + r) / CELL));
-      const gy0 = Math.max(0, Math.floor((p.y - r) / CELL));
-      const gy1 = Math.min(gh - 1, Math.ceil((p.y + r) / CELL));
-      const r2 = r * r;
+  // metri per pixel a una data latitudine: MapLibre ragiona su tile logici
+  // da 512px, quindi circonferenza terrestre / (512 * 2^zoom)
+  const zoomScale = Math.pow(2, map.getZoom());
 
-      for (let gy = gy0; gy <= gy1; gy++) {
-        const cy = (gy + 0.5) * CELL;
-        const dy2 = (cy - p.y) * (cy - p.y);
-        if (dy2 > r2) continue;
-        const rowBase = gy * gw;
-        for (let gx = gx0; gx <= gx1; gx++) {
-          const cx = (gx + 0.5) * CELL;
-          const dx = cx - p.x;
-          const d2 = dx * dx + dy2;
-          if (d2 >= r2) continue;
-          const t2 = d2 / r2;
-          const wgt = (1 - t2) * (1 - t2);
-          const idx = rowBase + gx;
-          sumW[idx] += wgt;
-          sumWV[idx] += wgt * z.value;
-        }
+  for (const z of heatZones) {
+    if (z.value <= 0.03) continue;
+    const p = map.project([z.lon, z.lat]);
+    const metersPerPixel = (78271.516964020484 * Math.cos((z.lat * Math.PI) / 180)) / zoomScale;
+    const r = z.r / metersPerPixel;
+    if (p.x + r < 0 || p.x - r > w || p.y + r < 0 || p.y - r > h) continue;
+
+    const gx0 = Math.max(0, Math.floor((p.x - r) / CELL));
+    const gx1 = Math.min(gw - 1, Math.ceil((p.x + r) / CELL));
+    const gy0 = Math.max(0, Math.floor((p.y - r) / CELL));
+    const gy1 = Math.min(gh - 1, Math.ceil((p.y + r) / CELL));
+    const r2 = r * r;
+
+    for (let gy = gy0; gy <= gy1; gy++) {
+      const cy = (gy + 0.5) * CELL;
+      const dy2 = (cy - p.y) * (cy - p.y);
+      if (dy2 > r2) continue;
+      const rowBase = gy * gw;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const cx = (gx + 0.5) * CELL;
+        const dx = cx - p.x;
+        const d2 = dx * dx + dy2;
+        if (d2 >= r2) continue;
+        const t2 = d2 / r2;
+        const wgt = (1 - t2) * (1 - t2);
+        const idx = rowBase + gx;
+        sumW[idx] += wgt;
+        sumWV[idx] += wgt * z.value;
       }
     }
+  }
 
-    const small = document.createElement("canvas");
-    small.width = gw;
-    small.height = gh;
-    const sctx = small.getContext("2d");
-    const img = sctx.createImageData(gw, gh);
-    const data = img.data;
-    const MAX_OPACITY = 200;
-    for (let i = 0; i < sumW.length; i++) {
-      const wgt = sumW[i];
-      if (wgt <= 0.001) continue;
-      const value = Math.max(0, Math.min(1, sumWV[i] / wgt));
-      const alpha = MAX_OPACITY * (1 - Math.exp(-wgt * 1.3));
-      const li = Math.round(value * 255) * 4;
-      const di = i * 4;
-      data[di] = COLOR_LUT[li];
-      data[di + 1] = COLOR_LUT[li + 1];
-      data[di + 2] = COLOR_LUT[li + 2];
-      data[di + 3] = Math.round(alpha);
-    }
-    sctx.putImageData(img, 0, 0);
+  const small = document.createElement("canvas");
+  small.width = gw;
+  small.height = gh;
+  const sctx = small.getContext("2d");
+  const img = sctx.createImageData(gw, gh);
+  const data = img.data;
+  const MAX_OPACITY = 200;
+  for (let i = 0; i < sumW.length; i++) {
+    const wgt = sumW[i];
+    if (wgt <= 0.001) continue;
+    const value = Math.max(0, Math.min(1, sumWV[i] / wgt));
+    const alpha = MAX_OPACITY * (1 - Math.exp(-wgt * 1.3));
+    const li = Math.round(value * 255) * 4;
+    const di = i * 4;
+    data[di] = COLOR_LUT[li];
+    data[di + 1] = COLOR_LUT[li + 1];
+    data[di + 2] = COLOR_LUT[li + 2];
+    data[di + 3] = Math.round(alpha);
+  }
+  sctx.putImageData(img, 0, 0);
 
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(small, 0, 0, gw, gh, 0, 0, w, h);
-  },
-});
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(small, 0, 0, gw, gh, 0, 0, w, h);
+}
 
-const zonesLayer = new HeatCanvasLayer().addTo(map);
+map.on("move", scheduleHeatRedraw);
+resizeHeatCanvas();
 
 let occurrences = [];
 let weatherCells = [];
@@ -925,11 +948,7 @@ function setupLocationSearch() {
       li.className = "location-search-result";
       li.textContent = shortLocationLabel(r.display_name);
       li.addEventListener("click", () => {
-        if (mapType === "3d" && map3d) {
-          map3d.flyTo({ center: [lon, lat], zoom: 13, duration: 1000 });
-        } else {
-          map.flyTo([lat, lon], 13, { duration: 1 });
-        }
+        map.flyTo({ center: [lon, lat], zoom: 12, duration: 1000 });
         input.value = shortLocationLabel(r.display_name);
         closeSearch();
       });
@@ -1020,7 +1039,7 @@ function updateLegend() {
    ad ogni redraw viene riconvertito in pixel in base a zoom e latitudine
    correnti, quindi le zone occupano sempre la stessa area reale sul
    terreno e non "si restringono" zoomando. Le zone stesse sono sfumature
-   radiali che si fondono dove si sovrappongono (vedi HeatCanvasLayer sopra),
+   radiali che si fondono dove si sovrappongono (vedi drawHeatCanvas sopra),
    così la mappa si legge come una vera heatmap e non come dischi dal bordo
    netto.
 */
@@ -1196,7 +1215,8 @@ function zoneRadiusMeters() {
 
 function drawZones(zones) {
   const r = zoneRadiusMeters();
-  zonesLayer.setZones(zones.map((z) => ({ ...z, r })));
+  heatZones = zones.map((z) => ({ ...z, r }));
+  scheduleHeatRedraw();
 }
 
 function render() {
@@ -1424,47 +1444,61 @@ window.hideRainTip = function () {
 };
 
 // Header (in alto) e legenda (in basso, su mobile a tutta larghezza) sono
-// overlay fissi fuori dal DOM della mappa: Leaflet non sa che coprono
-// parte del suo container, quindi il suo auto-pan calcolato sulla sola
-// dimensione della mappa può posizionare il popup proprio dietro a questi
-// elementi. Misuriamo le altezze reali (cambiano tra desktop/mobile e in
-// base allo stato aperto/chiuso della legenda) invece di un valore fisso.
-function popupAutoPanPadding() {
-  const headerEl = document.querySelector(".topbar");
-  const legendEl = document.getElementById("legend");
-  const headerH = headerEl ? headerEl.getBoundingClientRect().height : 0;
-  const legendH = legendEl ? legendEl.getBoundingClientRect().height : 0;
-  return {
-    top: L.point(16, headerH + 16),
-    bottom: L.point(16, legendH + 16),
-  };
+// overlay fissi sopra la mappa: il motore non sa che coprono parte del suo
+// container, e i popup di MapLibre non hanno un auto-pan proprio. Dopo
+// l'apertura misuriamo dove è finito davvero il popup e spostiamo la mappa
+// quel tanto che basta perché non resti dietro a quegli elementi.
+function nudgePopupIntoView(popup) {
+  requestAnimationFrame(() => {
+    const el = popup.getElement();
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.height) return;
+
+    const header = document.querySelector(".topbar");
+    const legend = document.getElementById("legend");
+    const margin = 12;
+    const topLimit = (header ? header.getBoundingClientRect().bottom : 0) + margin;
+    const legendVisible = legend && getComputedStyle(legend).display !== "none";
+    const bottomLimit = legendVisible
+      ? legend.getBoundingClientRect().top - margin
+      : window.innerHeight - margin;
+
+    // panBy sposta la mappa: il contenuto (popup compreso) si muove del
+    // valore opposto, quindi lo scarto va passato con questo segno
+    let dy = 0;
+    if (rect.top < topLimit) dy = rect.top - topLimit;
+    else if (rect.bottom > bottomLimit) dy = Math.min(rect.bottom - bottomLimit, rect.top - topLimit);
+
+    let dx = 0;
+    if (rect.left < margin) dx = rect.left - margin;
+    else if (rect.right > window.innerWidth - margin) {
+      dx = Math.min(rect.right - (window.innerWidth - margin), rect.left - margin);
+    }
+
+    if (dx || dy) map.panBy([dx, dy], { duration: 300 });
+  });
 }
 
 function onMapClick(e) {
-  const { lat, lng } = e.latlng;
+  const { lat, lng } = e.lngLat;
   openSpeciesIdx = null;
-  const pad = popupAutoPanPadding();
-  const popup = L.popup({
-    className: "wx-leaflet-popup",
-    maxWidth: 320,
-    minWidth: 280,
-    autoPanPaddingTopLeft: pad.top,
-    autoPanPaddingBottomRight: pad.bottom,
+  const popup = new maplibregl.Popup({
+    className: "wx-map-popup",
+    maxWidth: "320px",
+    focusAfterOpen: false,
   })
-    .setLatLng(e.latlng)
-    .setContent(popupSkeleton(lat, lng))
-    .openOn(map);
+    .setLngLat([lng, lat])
+    .setHTML(popupSkeleton(lat, lng))
+    .addTo(map);
   activePopupInstance = popup;
   lastPopupParams = null;
+  nudgePopupIntoView(popup);
 
-  // Leaflet ferma la propagazione di mousedown/touchstart dal popup verso la
-  // mappa, ma NON quella dell'evento "click" vero e proprio: un tocco sulle
-  // righe specie arrivava fino al listener di click della mappa e apriva un
-  // secondo popup sopra quello attuale (per questo "non si cliccava" — in
-  // realtà il popup sbagliato si richiudeva/sostituiva subito). Fermiamo
-  // esplicitamente anche "click" sul contenuto del popup.
+  // un tocco sulle righe specie non deve arrivare alla mappa e aprire un
+  // secondo popup sopra quello attuale
   const popupEl = popup.getElement();
-  if (popupEl) L.DomEvent.on(popupEl, "click", L.DomEvent.stopPropagation);
+  if (popupEl) popupEl.addEventListener("click", (ev) => ev.stopPropagation());
 
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
@@ -1481,15 +1515,16 @@ function onMapClick(e) {
     fetchClcVegClass(lat, lng).catch(() => null),
   ])
     .then(([data, vegClass]) => {
-      if (map.hasLayer(popup)) {
+      if (popup.isOpen()) {
         data.vegClass = vegClass;
         lastPopupParams = { lat, lon: lng, data };
-        popup.setContent(popupContent(lat, lng, data, openSpeciesIdx));
+        setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
+        nudgePopupIntoView(popup);
       }
     })
     .catch((err) => {
       console.error(err);
-      if (map.hasLayer(popup)) popup.setContent(popupError(lat, lng));
+      if (popup.isOpen()) setPopupHTML(popup, popupError(lat, lng));
     });
 }
 
@@ -1501,6 +1536,15 @@ updateLegend();
 setupMobileMenus();
 setupLocationSearch();
 map.on("click", onMapClick);
+
+// visibilità dei layer e terreno si possono impostare solo a stile
+// caricato: qui applichiamo il tipo di mappa scelto (anche quello
+// ripescato dalla preferenza salvata) e disegniamo la heatmap
+map.on("load", () => {
+  mapStyleReady = true;
+  resizeHeatCanvas();
+  setMapType(mapType);
+});
 
 Promise.all([
   fetch("data/occurrences.geojson").then((r) => r.json()),

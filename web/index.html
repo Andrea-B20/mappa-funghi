@@ -7,7 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Domine:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -60,7 +59,36 @@
 
   <main>
     <div id="map"></div>
-    <div id="map3d" hidden></div>
+
+    <div class="map-controls" id="mapControls">
+      <!-- zoom: un unico controllo a pillola invece di due pulsanti quadrati
+           separati; su smartphone resta nascosto (basta il pinch) -->
+      <div class="zoom-pill">
+        <button id="zoomIn" type="button" aria-label="Ingrandisci">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
+        <span class="zoom-pill-sep" aria-hidden="true"></span>
+        <button id="zoomOut" type="button" aria-label="Riduci">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14" /></svg>
+        </button>
+      </div>
+
+      <!-- bussola: trascina per ruotare la mappa, tocca per rimettere il
+           nord in alto. Su smartphone la rotazione si fa anche con due dita -->
+      <button class="compass-btn" id="compassBtn" type="button" aria-label="Ruota la mappa (tocca per rimettere il nord in alto)">
+        <svg viewBox="0 0 24 24" id="compassNeedle" aria-hidden="true">
+          <path d="M12 3.5 15.2 12H8.8L12 3.5Z" fill="currentColor" />
+          <path d="M12 20.5 8.8 12h6.4L12 20.5Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+        </svg>
+      </button>
+
+      <!-- inclinazione: slider verticale, dal basso (mappa piatta) verso
+           l'alto (vista radente). Solo in Rilievo 3D -->
+      <div class="tilt-control" id="tiltControl" hidden>
+        <span class="tilt-value" id="tiltValue">60°</span>
+        <input class="tilt-range" id="tiltRange" type="range" min="0" max="85" step="1" value="60" aria-label="Inclinazione della mappa" />
+      </div>
+    </div>
 
     <div class="layer-menu" id="layerMenu">
       <button class="layer-toggle" id="layerToggle" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Tipo di mappa">
@@ -106,7 +134,6 @@
   </main>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="app.js"></script>
 </body>
