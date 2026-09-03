@@ -1585,10 +1585,9 @@ function nudgePopupIntoView(popup) {
 
 /* ---------------- Notifiche pioggia (zone disegnate + OneSignal) ---- */
 
-// sostituire con l'App ID reale creato su onesignal.com (Settings > Keys &
-// IDs): finché resta il placeholder, init() più sotto non parte e il
-// pulsante campanella resta silenziosamente inattivo, senza errori
-const ONESIGNAL_APP_ID = "INSERISCI_QUI_APP_ID_ONESIGNAL";
+// App ID dell'app OneSignal collegata al sito (onesignal.com > Settings >
+// Keys & IDs)
+const ONESIGNAL_APP_ID = "a2dbdf99-3704-4e41-a791-e2add385f9dd";
 
 const NOTIFY_ZONES_KEY = "mappaFunghi.notifyZones";
 const PUSH_ENABLED_KEY = "mappaFunghi.pushEnabled";
