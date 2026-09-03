@@ -42,6 +42,14 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 MIN_MM_TO_NOTIFY = 3.0
 
 
+# OneSignal crea un "utente" anche solo caricando la pagina (SDK
+# inizializzato), prima ancora che qualcuno attivi le notifiche: la
+# stragrande maggioranza non avrà mai il tag notify_zones. Un tetto sulle
+# pagine scandite evita che l'Action giri per ore se i visitatori (anche
+# solo i miei di test) diventano migliaia
+MAX_SUBSCRIBER_PAGES = 100
+
+
 def fetch_subscribers():
     """Ritorna [{subscription_ids, zones: [{id, lat, lon}, ...]}], una voce
     per ogni iscritto che ha almeno una zona salvata (tag notify_zones)."""
@@ -49,12 +57,13 @@ def fetch_subscribers():
     offset = 0
     limit = 200
     headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}"}
-    while True:
+    for page in range(MAX_SUBSCRIBER_PAGES):
         url = USERS_URL.format(app_id=ONESIGNAL_APP_ID)
         resp = requests.get(url, headers=headers, params={"limit": limit, "offset": offset}, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         users = data.get("users", [])
+        print(f"pagina {page + 1}: {len(users)} utenti (offset {offset})")
         if not users:
             break
         for user in users:
