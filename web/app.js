@@ -1613,7 +1613,16 @@ const MIN_DRAW_POINTS = 3;
 window.OneSignalDeferred = window.OneSignalDeferred || [];
 if (!ONESIGNAL_APP_ID.startsWith("INSERISCI")) {
   window.OneSignalDeferred.push(async (OneSignal) => {
-    await OneSignal.init({ appId: ONESIGNAL_APP_ID });
+    await OneSignal.init({
+      appId: ONESIGNAL_APP_ID,
+      // il sito vive in un sottopercorso di github.io (/mappa-funghi/),
+      // non alla radice del dominio: senza queste due righe l'SDK cerca
+      // OneSignalSDKWorker.js alla radice (404), il service worker non si
+      // registra mai e nessuna vera sottoscrizione push si crea — anche
+      // se il permesso del browser risulta concesso
+      serviceWorkerPath: "mappa-funghi/OneSignalSDKWorker.js",
+      serviceWorkerParam: { scope: "/mappa-funghi/" },
+    });
   });
 }
 
