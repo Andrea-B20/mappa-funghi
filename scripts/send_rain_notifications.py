@@ -1,6 +1,6 @@
 """
-Controlla la pioggia caduta nella zona salvata da ogni iscritto alle
-notifiche e invia un push via OneSignal quando è piovuto. Gira dopo
+Controlla la pioggia caduta in ognuna delle zone salvate da ogni iscritto
+alle notifiche e invia un push via OneSignal quando è piovuto. Gira dopo
 fetch_weather_grid.py, nella stessa Action giornaliera.
 
 Richiede due secret GitHub Action:
@@ -11,9 +11,11 @@ Se mancano esce subito senza fare nulla: finché non vengono configurati
 le notifiche restano semplicemente disattivate, senza rompere il resto
 dell'aggiornamento dati.
 
-Le zone sono salvate come tag sull'utente OneSignal (zone_lat, zone_lon,
-zone_radius_km) quando l'utente disegna la zona sul sito, vedi
-requestPushAndTagZone in web/app.js.
+Le zone di un utente sono un poligono disegnato a mano libera sul sito
+(vedi setupRainZone in web/app.js): qui contano solo id + centroide,
+salvati in un unico tag OneSignal "notify_zones" (JSON), non l'intera
+forma — al server serve solo un punto rappresentativo per interrogare il
+meteo, non il contorno esatto.
 
 NB: non è stato possibile testare questo script end-to-end senza un
 account OneSignal reale — verificare con un invio di prova
@@ -21,6 +23,7 @@ account OneSignal reale — verificare con un invio di prova
 nel frattempo l'API di OneSignal fosse cambiata.
 """
 
+import json
 import os
 import sys
 import time
@@ -40,9 +43,8 @@ MIN_MM_TO_NOTIFY = 3.0
 
 
 def fetch_subscribers():
-    """Ritorna una lista di zone salvate: [{subscription_ids, lat, lon,
-    radius_km}], una per ogni iscritto che ha effettivamente disegnato e
-    attivato una zona (tag zone_lat/zone_lon presenti)."""
+    """Ritorna [{subscription_ids, zones: [{id, lat, lon}, ...]}], una voce
+    per ogni iscritto che ha almeno una zona salvata (tag notify_zones)."""
     subscribers = []
     offset = 0
     limit = 200
@@ -57,8 +59,15 @@ def fetch_subscribers():
             break
         for user in users:
             tags = (user.get("properties") or {}).get("tags") or {}
-            lat, lon = tags.get("zone_lat"), tags.get("zone_lon")
-            if lat is None or lon is None:
+            raw_zones = tags.get("notify_zones")
+            if not raw_zones:
+                continue
+            try:
+                zones = json.loads(raw_zones)
+            except (TypeError, ValueError):
+                continue
+            zones = [z for z in zones if z.get("lat") is not None and z.get("lon") is not None]
+            if not zones:
                 continue
             push_ids = [
                 s["id"] for s in (user.get("subscriptions") or [])
@@ -66,12 +75,7 @@ def fetch_subscribers():
             ]
             if not push_ids:
                 continue
-            subscribers.append({
-                "subscription_ids": push_ids,
-                "lat": float(lat),
-                "lon": float(lon),
-                "radius_km": float(tags.get("zone_radius_km") or 10.0),
-            })
+            subscribers.append({"subscription_ids": push_ids, "zones": zones})
         offset += limit
         if offset >= data.get("total_count", offset):
             break
@@ -104,20 +108,27 @@ def fetch_conditions(lat, lon):
     idx = len(dates) - 2 if len(dates) >= 2 else len(dates) - 1
     hourly_temp = (data.get("hourly") or {}).get("temperature_2m", [])
     return {
-        "date": dates[idx],
         "mm": precip[idx] if idx < len(precip) else None,
         "temp_c": hourly_temp[-1] if hourly_temp else None,
     }
 
 
-def send_push(subscription_ids, mm, temp_c):
+def send_push(subscription_ids, rained_zones):
     headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
-    temp_txt = f", {round(temp_c)}°C" if temp_c is not None else ""
+    if len(rained_zones) == 1:
+        z = rained_zones[0]
+        temp_txt = f", {round(z['temp_c'])}°C" if z["temp_c"] is not None else ""
+        heading = "Ha piovuto nella tua zona"
+        content = f"{z['mm']:.0f}mm caduti ieri{temp_txt}. Controlla le condizioni sulla mappa."
+    else:
+        max_mm = max(z["mm"] for z in rained_zones)
+        heading = f"Ha piovuto in {len(rained_zones)} delle tue zone"
+        content = f"Fino a {max_mm:.0f}mm caduti ieri. Controlla le condizioni sulla mappa."
     body = {
         "app_id": ONESIGNAL_APP_ID,
         "include_subscription_ids": subscription_ids,
-        "headings": {"it": "Ha piovuto nella tua zona"},
-        "contents": {"it": f"{mm:.0f}mm caduti ieri{temp_txt}. Controlla le condizioni sulla mappa."},
+        "headings": {"it": heading},
+        "contents": {"it": content},
         "url": "https://andrea-b20.github.io/mappa-funghi/",
     }
     resp = requests.post(NOTIFICATIONS_URL, headers=headers, json=body, timeout=30)
@@ -129,21 +140,26 @@ def main():
         print("Notifiche pioggia non configurate (secret OneSignal mancanti), salto.")
         return
     subscribers = fetch_subscribers()
-    print(f"{len(subscribers)} zone salvate da controllare")
+    total_zones = sum(len(s["zones"]) for s in subscribers)
+    print(f"{len(subscribers)} iscritti, {total_zones} zone totali da controllare")
     for sub in subscribers:
-        try:
-            conditions = fetch_conditions(sub["lat"], sub["lon"])
-        except Exception as exc:
-            print(f"errore meteo per {sub['lat']},{sub['lon']}: {exc}", file=sys.stderr)
+        rained = []
+        for zone in sub["zones"]:
+            try:
+                conditions = fetch_conditions(zone["lat"], zone["lon"])
+            except Exception as exc:
+                print(f"errore meteo per {zone['lat']},{zone['lon']}: {exc}", file=sys.stderr)
+                continue
+            if conditions and conditions["mm"] and conditions["mm"] >= MIN_MM_TO_NOTIFY:
+                rained.append({**zone, **conditions})
+            time.sleep(0.1)
+        if not rained:
             continue
-        if not conditions or not conditions["mm"] or conditions["mm"] < MIN_MM_TO_NOTIFY:
-            continue
         try:
-            send_push(sub["subscription_ids"], conditions["mm"], conditions["temp_c"])
-            print(f"notifica inviata per {sub['lat']},{sub['lon']}: {conditions['mm']}mm")
+            send_push(sub["subscription_ids"], rained)
+            print(f"notifica inviata: {len(rained)} zone piovose su {len(sub['zones'])}")
         except Exception as exc:
             print(f"errore invio push: {exc}", file=sys.stderr)
-        time.sleep(0.2)
 
 
 if __name__ == "__main__":

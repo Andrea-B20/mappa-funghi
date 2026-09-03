@@ -114,15 +114,14 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
         </button>
       </div>
-      <p class="zone-panel-hint" id="zoneHint">Tocca un punto sulla mappa per posizionare il centro della zona.</p>
-      <div class="zone-panel-radius" id="zoneRadiusRow" hidden>
-        <label for="zoneRadius">Raggio: <span id="zoneRadiusValue">10</span> km</label>
-        <input type="range" id="zoneRadius" min="3" max="30" step="1" value="10" />
+      <p class="zone-panel-hint" id="zoneDrawHint" hidden>Trascina sulla mappa per disegnare il contorno della zona, rilascia per chiuderla.</p>
+      <ul class="zone-list" id="zoneList"></ul>
+      <p class="zone-panel-empty" id="zoneEmpty">Nessuna zona ancora disegnata.</p>
+      <div class="zone-panel-actions">
+        <button class="zone-btn zone-btn-primary" id="zoneDrawBtn" type="button">Disegna nuova zona</button>
+        <button class="zone-btn" id="zoneDrawCancel" type="button" hidden>Annulla disegno</button>
       </div>
-      <div class="zone-panel-actions" id="zoneActions" hidden>
-        <button class="zone-btn zone-btn-primary" id="zoneActivate" type="button">Attiva notifiche</button>
-        <button class="zone-btn" id="zoneRemove" type="button" hidden>Rimuovi zona</button>
-      </div>
+      <button class="zone-btn zone-enable-push" id="zoneEnablePush" type="button" hidden>Attiva notifiche push</button>
     </div>
 
     <div class="ios-push-hint-scrim" id="iosPushHintScrim" hidden></div>

@@ -133,7 +133,12 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--sp-5);
-  padding: var(--sp-3) var(--sp-5);
+  /* env(safe-area-inset-top) è 0 in un tab normale: conta solo da app
+     installata su iOS, dove lo status bar "black-translucent" (vedi
+     index.html) rende l'area della notch/Dynamic Island parte del
+     contenuto web invece di riservarla — senza questo l'header ci finisce
+     sotto */
+  padding: calc(var(--sp-3) + env(safe-area-inset-top)) var(--sp-5);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
@@ -669,10 +674,45 @@ main {
 .zone-panel-close { color: var(--text-faint); padding: 4px; }
 .zone-panel-close svg { width: 16px; height: 16px; display: block; }
 .zone-panel-close:hover { color: var(--text); }
-.zone-panel-hint { font-size: 12.5px; color: var(--text-muted); line-height: 1.4; }
-.zone-panel-radius { display: flex; flex-direction: column; gap: 6px; }
-.zone-panel-radius label { font-size: 12.5px; color: var(--text-muted); }
-.zone-panel-radius input { width: 100%; accent-color: var(--accent); }
+.zone-panel-hint { font-size: 12.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: var(--sp-2); }
+
+/* elenco delle zone salvate: ognuna col proprio pulsante elimina, non un
+   pulsante unico globale — più zone possono coesistere */
+.zone-list { display: flex; flex-direction: column; gap: 6px; }
+.zone-list:empty { display: none; }
+.zone-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: 8px 8px 8px 12px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.zone-list-name { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.zone-list-name::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--wet);
+  flex: none;
+}
+.zone-list-remove {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  border-radius: 50%;
+}
+.zone-list-remove svg { width: 15px; height: 15px; display: block; }
+.zone-list-remove:hover { color: var(--dry); background: var(--surface-2); }
+
+.zone-panel-empty { font-size: 12.5px; color: var(--text-faint); margin: 0 0 var(--sp-2); }
+
 .zone-panel-actions { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
 .zone-btn {
   height: 38px;
@@ -687,6 +727,7 @@ main {
 .zone-btn:hover { border-color: var(--border-strong); color: var(--text); }
 .zone-btn-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .zone-btn-primary:hover { background: var(--accent); color: var(--accent-ink); opacity: 0.9; }
+.zone-enable-push { width: 100%; margin-top: var(--sp-2); }
 
 /* istruzioni "aggiungi a Home" su iOS: vero popup modale, a differenza del
    pannello zona qui sopra non deve restare aperto mentre si tocca la
@@ -1066,7 +1107,7 @@ main {
   /* la mappa è il contenuto principale: header il più basso possibile.
      Marchio e controlli condividono un'unica riga compatta (prima erano
      due righe separate, "Mappa Funghi" per esteso + una riga sotto) */
-  .topbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
+  .topbar { padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
 
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
@@ -1363,7 +1404,7 @@ main {
 @media (max-width: 720px), (max-height: 480px) {
   /* header compatto anche in orizzontale: qui l'altezza è la risorsa
      scarsa, non la larghezza, ma vale la stessa priorità alla mappa */
-  .topbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
+  .topbar { padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
