@@ -1583,7 +1583,204 @@ function nudgePopupIntoView(popup) {
   });
 }
 
+/* ---------------- Notifiche pioggia (zona disegnata + OneSignal) ---- */
+
+// sostituire con l'App ID reale creato su onesignal.com (Settings > Keys &
+// IDs): finché resta il placeholder, init() più sotto non parte e il
+// pulsante campanella resta silenziosamente inattivo, senza errori
+const ONESIGNAL_APP_ID = "INSERISCI_QUI_APP_ID_ONESIGNAL";
+
+const NOTIFY_ZONE_KEY = "mappaFunghi.notifyZone";
+const IOS_HINT_SHOWN_KEY = "mappaFunghi.iosHintShown";
+let notifyZone = null;
+try {
+  notifyZone = JSON.parse(localStorage.getItem(NOTIFY_ZONE_KEY) || "null");
+} catch {
+  notifyZone = null;
+}
+let placingZoneCenter = false;
+
+window.OneSignalDeferred = window.OneSignalDeferred || [];
+if (!ONESIGNAL_APP_ID.startsWith("INSERISCI")) {
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    await OneSignal.init({ appId: ONESIGNAL_APP_ID });
+  });
+}
+
+function isIOS() {
+  // l'iPad in modalità "richiedi sito desktop" si presenta come
+  // navigator.platform "MacIntel" con touch: lo distinguiamo da un vero
+  // Mac (che non ha schermo touch) richiedendo anche "Macintosh" nella UA,
+  // così un Android/Chrome che lasci platform a "MacIntel" (capita in
+  // alcuni emulatori) non scatta come falso positivo
+  return (
+    /iP(hone|od|ad)/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent))
+  );
+}
+function isStandalonePwa() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+function showIosPushHint() {
+  document.getElementById("iosPushHintScrim").hidden = false;
+  document.getElementById("iosPushHint").hidden = false;
+}
+function hideIosPushHint() {
+  document.getElementById("iosPushHintScrim").hidden = true;
+  document.getElementById("iosPushHint").hidden = true;
+}
+
+// approssima un cerchio geografico (raggio in km) con un poligono di 64
+// punti, usando la formula del punto di destinazione: a differenza di un
+// cerchio in pixel CSS, così segue davvero terreno e zoom della mappa
+function circlePolygon(lat, lon, radiusKm, steps = 64) {
+  const R = 6371;
+  const latRad = (lat * Math.PI) / 180;
+  const lonRad = (lon * Math.PI) / 180;
+  const angDist = radiusKm / R;
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const bearing = (i / steps) * 2 * Math.PI;
+    const destLat = Math.asin(
+      Math.sin(latRad) * Math.cos(angDist) + Math.cos(latRad) * Math.sin(angDist) * Math.cos(bearing)
+    );
+    const destLon =
+      lonRad +
+      Math.atan2(
+        Math.sin(bearing) * Math.sin(angDist) * Math.cos(latRad),
+        Math.cos(angDist) - Math.sin(latRad) * Math.sin(destLat)
+      );
+    coords.push([(destLon * 180) / Math.PI, (destLat * 180) / Math.PI]);
+  }
+  return { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [coords] } };
+}
+
+function drawZoneCircle() {
+  const source = map.getSource("notifyZone");
+  if (!source) return;
+  source.setData({
+    type: "FeatureCollection",
+    features: notifyZone ? [circlePolygon(notifyZone.lat, notifyZone.lon, notifyZone.radiusKm)] : [],
+  });
+}
+
+function requestPushAndTagZone(zone) {
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    try {
+      await OneSignal.Notifications.requestPermission();
+      await OneSignal.User.addTags({
+        zone_lat: zone.lat.toFixed(4),
+        zone_lon: zone.lon.toFixed(4),
+        zone_radius_km: String(zone.radiusKm),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  });
+}
+
+function clearZoneTags() {
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    try {
+      await OneSignal.User.removeTags(["zone_lat", "zone_lon", "zone_radius_km"]);
+    } catch (err) {
+      console.error(err);
+    }
+  });
+}
+
+function setupRainZone() {
+  const btn = document.getElementById("notifyZoneBtn");
+  const panel = document.getElementById("zonePanel");
+  const hint = document.getElementById("zoneHint");
+  const radiusRow = document.getElementById("zoneRadiusRow");
+  const radiusInput = document.getElementById("zoneRadius");
+  const radiusValue = document.getElementById("zoneRadiusValue");
+  const actions = document.getElementById("zoneActions");
+  const activateBtn = document.getElementById("zoneActivate");
+  const removeBtn = document.getElementById("zoneRemove");
+  const closeBtn = document.getElementById("zonePanelClose");
+
+  const showExistingZone = () => {
+    hint.hidden = true;
+    radiusRow.hidden = false;
+    actions.hidden = false;
+    removeBtn.hidden = false;
+    radiusInput.value = notifyZone.radiusKm;
+    radiusValue.textContent = notifyZone.radiusKm;
+    activateBtn.textContent = "Attiva notifiche";
+  };
+
+  btn.addEventListener("click", () => {
+    panel.hidden = false;
+    if (notifyZone) {
+      showExistingZone();
+    } else {
+      hint.hidden = false;
+      radiusRow.hidden = true;
+      actions.hidden = true;
+      placingZoneCenter = true;
+      map.getCanvas().style.cursor = "crosshair";
+    }
+  });
+
+  closeBtn.addEventListener("click", () => {
+    panel.hidden = true;
+    if (placingZoneCenter) {
+      placingZoneCenter = false;
+      map.getCanvas().style.cursor = "";
+    }
+  });
+
+  radiusInput.addEventListener("input", () => {
+    if (!notifyZone) return;
+    notifyZone.radiusKm = Number(radiusInput.value);
+    radiusValue.textContent = notifyZone.radiusKm;
+    drawZoneCircle();
+  });
+
+  activateBtn.addEventListener("click", () => {
+    if (!notifyZone) return;
+    if (isIOS() && !isStandalonePwa()) {
+      showIosPushHint();
+      return;
+    }
+    localStorage.setItem(NOTIFY_ZONE_KEY, JSON.stringify(notifyZone));
+    requestPushAndTagZone(notifyZone);
+    activateBtn.textContent = "Notifiche attive ✓";
+  });
+
+  removeBtn.addEventListener("click", () => {
+    notifyZone = null;
+    localStorage.removeItem(NOTIFY_ZONE_KEY);
+    drawZoneCircle();
+    clearZoneTags();
+    panel.hidden = true;
+  });
+
+  document.getElementById("iosPushHintClose").addEventListener("click", hideIosPushHint);
+  document.getElementById("iosPushHintScrim").addEventListener("click", hideIosPushHint);
+
+  if (isIOS() && !isStandalonePwa() && !localStorage.getItem(IOS_HINT_SHOWN_KEY)) {
+    showIosPushHint();
+    localStorage.setItem(IOS_HINT_SHOWN_KEY, "1");
+  }
+}
+
 function onMapClick(e) {
+  if (placingZoneCenter) {
+    placingZoneCenter = false;
+    map.getCanvas().style.cursor = "";
+    const radiusKm = notifyZone ? notifyZone.radiusKm : 10;
+    notifyZone = { lat: e.lngLat.lat, lon: e.lngLat.lng, radiusKm };
+    drawZoneCircle();
+    document.getElementById("zoneHint").hidden = true;
+    document.getElementById("zoneRadiusRow").hidden = false;
+    document.getElementById("zoneActions").hidden = false;
+    document.getElementById("zoneRadius").value = radiusKm;
+    document.getElementById("zoneRadiusValue").textContent = radiusKm;
+    return;
+  }
   const { lat, lng } = e.lngLat;
   openSpeciesIdx = null;
   const popup = new maplibregl.Popup({
@@ -1638,6 +1835,7 @@ buildModeSwitch();
 updateLegend();
 setupMobileMenus();
 setupLocationSearch();
+setupRainZone();
 map.on("click", onMapClick);
 
 // visibilità dei layer e terreno si possono impostare solo a stile
@@ -1647,6 +1845,10 @@ map.on("load", () => {
   mapStyleReady = true;
   resizeHeatCanvas();
   setMapType(mapType);
+  map.addSource("notifyZone", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "notifyZoneFill", type: "fill", source: "notifyZone", paint: { "fill-color": "#6fa8dc", "fill-opacity": 0.15 } });
+  map.addLayer({ id: "notifyZoneLine", type: "line", source: "notifyZone", paint: { "line-color": "#6fa8dc", "line-width": 2 } });
+  drawZoneCircle();
 });
 
 Promise.all([

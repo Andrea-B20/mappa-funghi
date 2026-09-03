@@ -627,6 +627,95 @@ main {
   background: var(--accent);
 }
 
+.notify-zone-btn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  box-shadow: var(--shadow-md);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.notify-zone-btn:hover { background: var(--surface-2); color: var(--text); }
+.notify-zone-btn svg { width: 21px; height: 21px; display: block; }
+
+/* piccola card informativa/di controllo per la zona notifiche: stesso
+   angolo dei controlli camera ma sul lato opposto (sinistra), così non si
+   sovrappone mai a zoom/bussola/inclinazione */
+.zone-panel {
+  position: absolute;
+  top: var(--sp-4);
+  left: var(--sp-4);
+  z-index: 1000;
+  width: 260px;
+  max-width: calc(100vw - 2 * var(--sp-4));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+.zone-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-2);
+}
+.zone-panel-head h2 { font-size: 14px; font-weight: 600; color: var(--text); }
+.zone-panel-close { color: var(--text-faint); padding: 4px; }
+.zone-panel-close svg { width: 16px; height: 16px; display: block; }
+.zone-panel-close:hover { color: var(--text); }
+.zone-panel-hint { font-size: 12.5px; color: var(--text-muted); line-height: 1.4; }
+.zone-panel-radius { display: flex; flex-direction: column; gap: 6px; }
+.zone-panel-radius label { font-size: 12.5px; color: var(--text-muted); }
+.zone-panel-radius input { width: 100%; accent-color: var(--accent); }
+.zone-panel-actions { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
+.zone-btn {
+  height: 38px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.zone-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.zone-btn-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.zone-btn-primary:hover { background: var(--accent); color: var(--accent-ink); opacity: 0.9; }
+
+/* istruzioni "aggiungi a Home" su iOS: vero popup modale, a differenza del
+   pannello zona qui sopra non deve restare aperto mentre si tocca la
+   mappa, quindi ha uno scrim che blocca l'interazione col resto */
+.ios-push-hint-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 5, 0.55);
+  z-index: 1600;
+}
+.ios-push-hint {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1601;
+  width: min(340px, calc(100vw - 48px));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--sp-5);
+}
+.ios-push-hint h2 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: var(--sp-2); }
+.ios-push-hint p { font-size: 13.5px; color: var(--text-muted); line-height: 1.5; }
+.ios-push-hint ol { margin: var(--sp-3) 0; padding-left: 20px; font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
+.ios-push-hint ol strong { color: var(--text); }
+.ios-push-hint .zone-btn-primary { width: 100%; margin-top: var(--sp-2); }
+
 /* ---------------------------------------------------------------------
    Layer menu (tipo di mappa: standard / satellite / rilievo 3D)
 --------------------------------------------------------------------- */

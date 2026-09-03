@@ -9,6 +9,15 @@
 <link href="https://fonts.googleapis.com/css2?family=Domine:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" />
 <link rel="stylesheet" href="style.css" />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0f1710" />
+<!-- richiesti da iOS perché il sito, aggiunto alla schermata Home, si apra
+     come app a schermo intero: solo così Safari abilita le notifiche push -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Mappa Funghi" />
+<link rel="apple-touch-icon" href="icons/icon-512.png" />
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
 <body>
 <div id="app">
@@ -87,6 +96,45 @@
       <div class="tilt-control" id="tiltControl" hidden>
         <input class="tilt-range" id="tiltRange" type="range" min="0" max="85" step="1" value="60" aria-label="Inclinazione della mappa" />
       </div>
+
+      <!-- notifiche pioggia: disegna una zona e ricevi un avviso quando il
+           dato meteo giornaliero segnala pioggia lì dentro -->
+      <button class="notify-zone-btn" id="notifyZoneBtn" type="button" aria-label="Notifiche pioggia">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6Z" />
+          <path d="M10 19a2 2 0 0 0 4 0" />
+        </svg>
+      </button>
+    </div>
+
+    <div class="zone-panel" id="zonePanel" hidden>
+      <div class="zone-panel-head">
+        <h2>Notifiche pioggia</h2>
+        <button class="zone-panel-close" id="zonePanelClose" type="button" aria-label="Chiudi">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <p class="zone-panel-hint" id="zoneHint">Tocca un punto sulla mappa per posizionare il centro della zona.</p>
+      <div class="zone-panel-radius" id="zoneRadiusRow" hidden>
+        <label for="zoneRadius">Raggio: <span id="zoneRadiusValue">10</span> km</label>
+        <input type="range" id="zoneRadius" min="3" max="30" step="1" value="10" />
+      </div>
+      <div class="zone-panel-actions" id="zoneActions" hidden>
+        <button class="zone-btn zone-btn-primary" id="zoneActivate" type="button">Attiva notifiche</button>
+        <button class="zone-btn" id="zoneRemove" type="button" hidden>Rimuovi zona</button>
+      </div>
+    </div>
+
+    <div class="ios-push-hint-scrim" id="iosPushHintScrim" hidden></div>
+    <div class="ios-push-hint" id="iosPushHint" hidden role="dialog" aria-label="Come attivare le notifiche su iPhone">
+      <h2>Ricevere notifiche su iPhone</h2>
+      <p>Safari abilita le notifiche solo per i siti aggiunti alla schermata Home:</p>
+      <ol>
+        <li>Tocca <strong>Condividi</strong> (il riquadro con la freccia verso l'alto, in basso nella barra di Safari)</li>
+        <li>Scegli <strong>Aggiungi a Home</strong></li>
+        <li>Apri Mappa Funghi dall'icona in Home, poi attiva le notifiche pioggia da lì</li>
+      </ol>
+      <button class="zone-btn zone-btn-primary" id="iosPushHintClose" type="button">Ho capito</button>
     </div>
 
     <div class="layer-menu" id="layerMenu">

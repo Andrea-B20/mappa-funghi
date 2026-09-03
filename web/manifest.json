@@ -1,0 +1,10 @@
+{
+  "name": "Mappa Funghi",
+  "short_name": "Mappa Funghi",
+  "description": "Zone di calore e previsioni per la raccolta funghi",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f1710",
+  "theme_color": "#0f1710",
+  "icons": [{ "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }]
+}
