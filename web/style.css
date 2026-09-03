@@ -725,9 +725,11 @@ main {
   transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 .zone-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.zone-btn:disabled { opacity: 0.6; cursor: default; }
 .zone-btn-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .zone-btn-primary:hover { background: var(--accent); color: var(--accent-ink); opacity: 0.9; }
 .zone-enable-push { width: 100%; margin-top: var(--sp-2); }
+#zonePushStatus { margin-top: var(--sp-2); color: var(--dry); }
 
 /* istruzioni "aggiungi a Home" su iOS: vero popup modale, a differenza del
    pannello zona qui sopra non deve restare aperto mentre si tocca la

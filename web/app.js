@@ -1845,21 +1845,43 @@ function setupRainZone() {
   drawBtn.addEventListener("click", startDrawing);
   drawCancelBtn.addEventListener("click", stopDrawing);
 
+  const pushStatus = document.getElementById("zonePushStatus");
+  const showPushStatus = (text) => {
+    pushStatus.textContent = text;
+    pushStatus.hidden = false;
+  };
+
   enablePushBtn.addEventListener("click", () => {
     if (isIOS() && !isStandalonePwa()) {
       showIosPushHint();
       return;
     }
-    localStorage.setItem(PUSH_ENABLED_KEY, "1");
+    pushStatus.hidden = true;
+    enablePushBtn.disabled = true;
+    enablePushBtn.textContent = "Attivazione…";
     window.OneSignalDeferred.push(async (OneSignal) => {
       try {
         await OneSignal.Notifications.requestPermission();
       } catch (err) {
         console.error(err);
       }
+      // requestPermission si risolve anche se l'utente nega o ignora il
+      // popup del browser: il vero esito va riletto da qui, non assunto —
+      // altrimenti un permesso negato veniva comunque segnato come
+      // "attivo" e il pulsante spariva senza che nulla funzionasse davvero
+      const granted = OneSignal.Notifications.permission === true;
+      enablePushBtn.disabled = false;
+      enablePushBtn.textContent = "Attiva notifiche push";
+      if (granted) {
+        localStorage.setItem(PUSH_ENABLED_KEY, "1");
+        syncZoneTags();
+        renderZoneList();
+      } else {
+        showPushStatus(
+          "Permesso non concesso. Controlla le impostazioni del sito (icona vicino all'indirizzo) e imposta le notifiche su \"Consenti\", poi riprova."
+        );
+      }
     });
-    syncZoneTags();
-    renderZoneList();
   });
 
   document.getElementById("iosPushHintClose").addEventListener("click", hideIosPushHint);
