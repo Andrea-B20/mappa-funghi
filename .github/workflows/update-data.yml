@@ -20,6 +20,7 @@ on:
         options:
           - meteo
           - storico
+          - notifiche
           - entrambi
 
 permissions:
@@ -46,9 +47,26 @@ jobs:
           git add web/data/weather_grid.geojson
           git diff --cached --quiet || git commit -m "Aggiorna dati meteo (automatico)"
           git push
-      # notifiche pioggia sulle zone disegnate dagli utenti (vedi
-      # web/app.js): se i secret OneSignal non sono configurati lo script
-      # esce subito senza fare nulla, quindi il passo è sempre sicuro
+
+  # notifiche pioggia sulle zone disegnate dagli utenti (vedi web/app.js):
+  # job separato da update-weather perché non dipende affatto dalla
+  # griglia meteo (interroga Open-Meteo punto per punto per conto suo) —
+  # tenerlo insieme voleva dire aspettare il fetch della griglia, lento e
+  # per nulla necessario, anche solo per un test manuale veloce. Se i
+  # secret OneSignal non sono configurati lo script esce subito senza
+  # fare nulla, quindi il job è sempre sicuro da eseguire
+  notify-rain:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.dataset == 'notifiche' || github.event.inputs.dataset == 'entrambi')) ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
       - name: Notifiche pioggia
         env:
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
