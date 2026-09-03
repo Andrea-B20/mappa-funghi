@@ -1,7 +1,8 @@
 """
 Controlla la pioggia caduta in ognuna delle zone salvate da ogni iscritto
-alle notifiche e invia un push via OneSignal quando è piovuto. Gira dopo
-fetch_weather_grid.py, nella stessa Action giornaliera.
+alle notifiche e invia un push via OneSignal quando è piovuto. Gira come
+job indipendente ("notify-rain") nell'Action giornaliera — non dipende
+dalla griglia meteo, interroga Open-Meteo punto per punto per conto suo.
 
 Richiede due secret GitHub Action:
   ONESIGNAL_APP_ID
@@ -17,12 +18,15 @@ salvati in un unico tag OneSignal "notify_zones" (JSON), non l'intera
 forma — al server serve solo un punto rappresentativo per interrogare il
 meteo, non il contorno esatto.
 
-NB: non è stato possibile testare questo script end-to-end senza un
-account OneSignal reale — verificare con un invio di prova
-(workflow_dispatch) alla prima attivazione, e aggiustare gli endpoint se
-nel frattempo l'API di OneSignal fosse cambiata.
+OneSignal non offre un endpoint per elencare direttamente tutti gli
+iscritti: bisogna passare da un export CSV asincrono (POST
+/players/csv_export, poi si scarica il file quando è pronto). È
+l'approccio usato qui in fetch_subscribers().
 """
 
+import csv
+import gzip
+import io
 import json
 import os
 import sys
@@ -33,61 +37,70 @@ import requests
 ONESIGNAL_APP_ID = os.environ.get("ONESIGNAL_APP_ID")
 ONESIGNAL_REST_API_KEY = os.environ.get("ONESIGNAL_REST_API_KEY")
 
-USERS_URL = "https://api.onesignal.com/apps/{app_id}/users"
-NOTIFICATIONS_URL = "https://onesignal.com/api/v1/notifications"
+CSV_EXPORT_URL = "https://api.onesignal.com/players/csv_export"
+NOTIFICATIONS_URL = "https://api.onesignal.com/notifications"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+# il file compresso non è pronto subito: va richiesto e poi ripescato con
+# qualche tentativo, l'URL risponde 404 finché la generazione non finisce
+CSV_POLL_INTERVAL_S = 3
+CSV_POLL_MAX_ATTEMPTS = 20
 
 # sotto questa soglia (mm caduti nel giorno) non avvisiamo: una spruzzata
 # non cambia le condizioni di raccolta e manderebbe solo notifiche inutili
 MIN_MM_TO_NOTIFY = 3.0
 
 
-# OneSignal crea un "utente" anche solo caricando la pagina (SDK
-# inizializzato), prima ancora che qualcuno attivi le notifiche: la
-# stragrande maggioranza non avrà mai il tag notify_zones. Un tetto sulle
-# pagine scandite evita che l'Action giri per ore se i visitatori (anche
-# solo i miei di test) diventano migliaia
-MAX_SUBSCRIBER_PAGES = 100
-
-
 def fetch_subscribers():
     """Ritorna [{subscription_ids, zones: [{id, lat, lon}, ...]}], una voce
     per ogni iscritto che ha almeno una zona salvata (tag notify_zones)."""
+    headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
+    resp = requests.post(
+        CSV_EXPORT_URL, headers=headers, params={"app_id": ONESIGNAL_APP_ID}, json={}, timeout=30
+    )
+    resp.raise_for_status()
+    csv_url = resp.json().get("csv_file_url")
+    if not csv_url:
+        print("OneSignal non ha restituito un URL di export", file=sys.stderr)
+        return []
+
+    csv_bytes = None
+    for attempt in range(CSV_POLL_MAX_ATTEMPTS):
+        dl = requests.get(csv_url, timeout=30)
+        if dl.status_code == 200:
+            csv_bytes = dl.content
+            break
+        print(f"export non ancora pronto (tentativo {attempt + 1}/{CSV_POLL_MAX_ATTEMPTS}), aspetto...")
+        time.sleep(CSV_POLL_INTERVAL_S)
+    if csv_bytes is None:
+        print("timeout in attesa dell'export CSV di OneSignal", file=sys.stderr)
+        return []
+
+    rows = csv.DictReader(io.StringIO(gzip.decompress(csv_bytes).decode("utf-8")))
+
     subscribers = []
-    offset = 0
-    limit = 200
-    headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}"}
-    for page in range(MAX_SUBSCRIBER_PAGES):
-        url = USERS_URL.format(app_id=ONESIGNAL_APP_ID)
-        resp = requests.get(url, headers=headers, params={"limit": limit, "offset": offset}, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        users = data.get("users", [])
-        print(f"pagina {page + 1}: {len(users)} utenti (offset {offset})")
-        if not users:
-            break
-        for user in users:
-            tags = (user.get("properties") or {}).get("tags") or {}
-            raw_zones = tags.get("notify_zones")
-            if not raw_zones:
-                continue
-            try:
-                zones = json.loads(raw_zones)
-            except (TypeError, ValueError):
-                continue
-            zones = [z for z in zones if z.get("lat") is not None and z.get("lon") is not None]
-            if not zones:
-                continue
-            push_ids = [
-                s["id"] for s in (user.get("subscriptions") or [])
-                if s.get("type") == "OneSignalPush" and s.get("id")
-            ]
-            if not push_ids:
-                continue
-            subscribers.append({"subscription_ids": push_ids, "zones": zones})
-        offset += limit
-        if offset >= data.get("total_count", offset):
-            break
+    for row in rows:
+        raw_tags = row.get("tags")
+        if not raw_tags:
+            continue
+        try:
+            tags = json.loads(raw_tags) or {}
+        except (TypeError, ValueError):
+            continue
+        raw_zones = tags.get("notify_zones")
+        if not raw_zones:
+            continue
+        try:
+            zones = json.loads(raw_zones)
+        except (TypeError, ValueError):
+            continue
+        zones = [z for z in zones if z.get("lat") is not None and z.get("lon") is not None]
+        # "id" nell'export /players/csv_export è lo stesso identificativo
+        # accettato da include_subscription_ids nell'invio (vedi send_push)
+        subscription_id = row.get("id")
+        if not zones or not subscription_id:
+            continue
+        subscribers.append({"subscription_ids": [subscription_id], "zones": zones})
     return subscribers
 
 
