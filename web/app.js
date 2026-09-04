@@ -1622,7 +1622,18 @@ if (!ONESIGNAL_APP_ID.startsWith("INSERISCI")) {
       // se il permesso del browser risulta concesso
       serviceWorkerPath: "mappa-funghi/OneSignalSDKWorker.js",
       serviceWorkerParam: { scope: "/mappa-funghi/" },
+    }).catch((err) => {
+      // un init fallito (dominio non autorizzato, rete, errore SDK) non deve
+      // impedire il riallineamento qui sotto, altrimenti un flag locale
+      // rimasto "attivo" resterebbe tale per sempre
+      console.error(err);
     });
+    try {
+      syncPushSubscriptionState(OneSignal);
+      OneSignal.User.PushSubscription.addEventListener("change", () => syncPushSubscriptionState(OneSignal));
+    } catch (err) {
+      console.error(err);
+    }
   });
 }
 
@@ -1657,8 +1668,27 @@ function pushPermissionState() {
   return Notification.permission; // "granted" | "denied" | "default"
 }
 
+// stato reale della sottoscrizione lato OneSignal, tenuto aggiornato
+// dall'SDK (vedi syncPushSubscriptionState): il permesso del browser da
+// solo non basta come prova che le notifiche funzionino — può essere
+// concesso senza che nessuna sottoscrizione sia mai stata creata, ed è
+// esattamente lo stato in cui restavano i browser che avevano provato ad
+// attivarle quando il service worker era ancora rotto
+let pushSubscribed = false;
+
 function pushIsActive() {
-  return pushPermissionState() === "granted" && localStorage.getItem(PUSH_ENABLED_KEY) === "1";
+  return pushPermissionState() === "granted" && pushSubscribed;
+}
+
+// riallinea flag locale e interfaccia allo stato vero di OneSignal, così un
+// browser rimasto con il flag "attivo" ma senza sottoscrizione torna da
+// solo a mostrare il pulsante per riattivarle
+function syncPushSubscriptionState(OneSignal) {
+  const sub = OneSignal.User.PushSubscription;
+  pushSubscribed = Boolean(sub.id) && sub.optedIn !== false;
+  if (pushSubscribed) localStorage.setItem(PUSH_ENABLED_KEY, "1");
+  else localStorage.removeItem(PUSH_ENABLED_KEY);
+  renderZoneList();
 }
 
 function showPushPrompt(text) {
@@ -1689,15 +1719,20 @@ function requestPushPermission(onResult) {
   window.OneSignalDeferred.push(async (OneSignal) => {
     try {
       await OneSignal.Notifications.requestPermission();
+      // il permesso concesso non crea da solo la sottoscrizione: optIn è il
+      // passo che la registra davvero presso OneSignal
+      if (OneSignal.Notifications.permission === true) await OneSignal.User.PushSubscription.optIn();
     } catch (err) {
       console.error(err);
     }
-    const granted = OneSignal.Notifications.permission === true;
-    if (granted) {
-      localStorage.setItem(PUSH_ENABLED_KEY, "1");
-      syncZoneTags();
+    // l'id della sottoscrizione arriva in modo asincrono: senza attenderlo
+    // segnaleremmo un successo che non c'è ancora
+    for (let i = 0; i < 20 && !OneSignal.User.PushSubscription.id; i++) {
+      await new Promise((r) => setTimeout(r, 300));
     }
-    onResult(granted);
+    syncPushSubscriptionState(OneSignal);
+    if (pushSubscribed) syncZoneTags();
+    onResult(pushSubscribed);
   });
 }
 
@@ -1792,8 +1827,11 @@ function renderZoneList() {
     list.appendChild(li);
   });
   empty.hidden = notifyZones.length > 0;
-  document.getElementById("zoneEnablePush").hidden =
-    notifyZones.length === 0 || localStorage.getItem(PUSH_ENABLED_KEY) === "1";
+  // il pulsante sparisce solo quando OneSignal conferma una sottoscrizione
+  // reale, non appena il flag locale dice "attivo": legarlo al flag lasciava
+  // senza via d'uscita chi era rimasto con il flag impostato ma senza
+  // iscrizione (e nasconderlo dipendeva dal buon esito dell'init dell'SDK)
+  document.getElementById("zoneEnablePush").hidden = notifyZones.length === 0 || pushIsActive();
 }
 
 function lngLatFromPointerEvent(e) {
@@ -1937,7 +1975,9 @@ function setupRainZone() {
       renderZoneList();
       if (!granted) {
         showPushStatus(
-          "Permesso non concesso. Controlla le impostazioni del sito (icona vicino all'indirizzo) e imposta le notifiche su \"Consenti\", poi riprova."
+          pushPermissionState() === "granted"
+            ? "Permesso concesso, ma l'iscrizione non è andata a buon fine. Ricarica la pagina e riprova."
+            : "Permesso non concesso. Controlla le impostazioni del sito (icona vicino all'indirizzo) e imposta le notifiche su \"Consenti\", poi riprova."
         );
       }
     });
