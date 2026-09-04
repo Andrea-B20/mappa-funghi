@@ -1878,6 +1878,7 @@ function setupRainZone() {
     drawCancelBtn.hidden = true;
     drawPoints = [];
     renderDrawPreview();
+    panel.hidden = false;
   };
 
   const onPointerDown = (e) => {
@@ -1886,6 +1887,9 @@ function setupRainZone() {
     const ll = lngLatFromPointerEvent(e);
     drawPoints = [[ll.lng, ll.lat]];
     drawLastClientPoint = [e.clientX, e.clientY];
+    // il pannello copre un angolo della mappa: mentre il dito traccia il
+    // contorno va tolto di mezzo, e torna appena la zona è chiusa
+    panel.hidden = true;
     canvasContainer.setPointerCapture(e.pointerId);
     e.preventDefault();
   };
@@ -1944,8 +1948,10 @@ function setupRainZone() {
   });
 
   closeBtn.addEventListener("click", () => {
-    panel.hidden = true;
+    // prima esce dal disegno (stopDrawing ripristina il pannello), poi lo
+    // chiude: invertendo l'ordine il pannello tornerebbe visibile
     if (drawingZone) stopDrawing();
+    panel.hidden = true;
   });
 
   drawBtn.addEventListener("click", startDrawing);
