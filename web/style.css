@@ -144,7 +144,10 @@ input:focus-visible {
      index.html) rende l'area della notch/Dynamic Island parte del
      contenuto web invece di riservarla — senza questo l'header ci finisce
      sotto */
-  padding: calc(var(--sp-3) + env(safe-area-inset-top)) var(--sp-5);
+  /* tre valori (alto / laterali / basso): con la forma a due valori lo
+     spazio della notch finirebbe applicato anche sotto, gonfiando
+     l'header con una fascia vuota sopra la mappa */
+  padding: calc(var(--sp-3) + env(safe-area-inset-top)) var(--sp-5) var(--sp-3);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
@@ -1115,7 +1118,7 @@ main {
   /* la mappa è il contenuto principale: header il più basso possibile.
      Marchio e controlli condividono un'unica riga compatta (prima erano
      due righe separate, "Mappa Funghi" per esteso + una riga sotto) */
-  .topbar { padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
+  .topbar { padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-3) var(--sp-2); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
 
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
@@ -1412,7 +1415,7 @@ main {
 @media (max-width: 720px), (max-height: 480px) {
   /* header compatto anche in orizzontale: qui l'altezza è la risorsa
      scarsa, non la larghezza, ma vale la stessa priorità alla mappa */
-  .topbar { padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-3); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
+  .topbar { padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-3) var(--sp-2); gap: var(--sp-2); row-gap: 0; flex-wrap: nowrap; }
   .brand { gap: 6px; flex: 0 0 auto; }
   .brand svg { width: 22px; height: 22px; }
   .brand h1 { display: none; }
