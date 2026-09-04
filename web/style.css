@@ -91,6 +91,12 @@ html, body {
   -webkit-touch-callout: default;
 }
 
+/* l'attributo hidden deve vincere su qualunque display assegnato dopo: il
+   display:none del browser ha specificità zero, quindi bastava una regola
+   tipo ".ios-push-hint .zone-btn { display: block }" per far ricomparire
+   un elemento marcato hidden dal JS */
+[hidden] { display: none !important; }
+
 ::selection { background: var(--accent); color: var(--accent-ink); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -757,7 +763,7 @@ main {
 .ios-push-hint p { font-size: 13.5px; color: var(--text-muted); line-height: 1.5; }
 .ios-push-hint ol { margin: var(--sp-3) 0; padding-left: 20px; font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
 .ios-push-hint ol strong { color: var(--text); }
-.ios-push-hint .zone-btn-primary { width: 100%; margin-top: var(--sp-2); }
+.ios-push-hint .zone-btn { display: block; width: 100%; margin-top: var(--sp-2); }
 
 /* ---------------------------------------------------------------------
    Layer menu (tipo di mappa: standard / satellite / rilievo 3D)

@@ -1649,6 +1649,58 @@ function hideIosPushHint() {
   document.getElementById("iosPushHint").hidden = true;
 }
 
+// "granted" solo se il browser ha davvero concesso il permesso: il flag in
+// localStorage da solo non basta, l'utente può revocarlo dalle impostazioni
+// del sito in qualsiasi momento, anche dopo averlo concesso
+function pushPermissionState() {
+  if (!("Notification" in window)) return "unsupported";
+  return Notification.permission; // "granted" | "denied" | "default"
+}
+
+function pushIsActive() {
+  return pushPermissionState() === "granted" && localStorage.getItem(PUSH_ENABLED_KEY) === "1";
+}
+
+function showPushPrompt(text) {
+  const prompt = document.getElementById("pushPrompt");
+  const allowBtn = document.getElementById("pushPromptAllow");
+  if (text) document.getElementById("pushPromptText").textContent = text;
+  // se il browser ha già bloccato le notifiche non serve richiederle: un
+  // nuovo requestPermission non mostrerebbe alcun dialogo, va sbloccato a
+  // mano dalle impostazioni del sito
+  const blocked = pushPermissionState() === "denied";
+  if (blocked) {
+    document.getElementById("pushPromptText").textContent =
+      "Le notifiche sono bloccate per questo sito. Sbloccale dalle impostazioni del sito (icona vicino all'indirizzo), poi riprova.";
+  }
+  allowBtn.hidden = blocked;
+  document.getElementById("pushPromptScrim").hidden = false;
+  prompt.hidden = false;
+}
+
+function hidePushPrompt() {
+  document.getElementById("pushPromptScrim").hidden = true;
+  document.getElementById("pushPrompt").hidden = true;
+}
+
+// unico punto in cui si chiede il permesso, condiviso dal pulsante del
+// pannello e dal popup che ricompare a zona disegnata
+function requestPushPermission(onResult) {
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    try {
+      await OneSignal.Notifications.requestPermission();
+    } catch (err) {
+      console.error(err);
+    }
+    const granted = OneSignal.Notifications.permission === true;
+    if (granted) {
+      localStorage.setItem(PUSH_ENABLED_KEY, "1");
+      syncZoneTags();
+    }
+    onResult(granted);
+  });
+}
+
 function pointsToPolygonFeature(points, id) {
   const ring = points.slice();
   const [flng, flat] = ring[0];
@@ -1819,7 +1871,8 @@ function setupRainZone() {
       /* capture già rilasciata dal browser, ignorato di proposito */
     }
     drawPointerId = null;
-    if (drawPoints.length >= MIN_DRAW_POINTS) {
+    const saved = drawPoints.length >= MIN_DRAW_POINTS;
+    if (saved) {
       notifyZones.push({ id: `zone-${Date.now()}`, points: drawPoints });
       persistZones();
       renderZonesSource();
@@ -1827,6 +1880,12 @@ function setupRainZone() {
       syncZoneTags();
     }
     stopDrawing();
+    // una zona senza permesso di notifica non avviserebbe mai: meglio
+    // chiederlo subito qui, invece di lasciarla salvata e muta
+    if (saved && !pushIsActive()) {
+      if (isIOS() && !isStandalonePwa()) showIosPushHint();
+      else showPushPrompt("La zona è salvata, ma senza il permesso di notifica non riceverai l'avviso quando ci piove.");
+    }
   };
 
   canvasContainer.addEventListener("pointerdown", onPointerDown);
@@ -1868,28 +1927,34 @@ function setupRainZone() {
     pushStatus.hidden = true;
     enablePushBtn.disabled = true;
     enablePushBtn.textContent = "Attivazione…";
-    window.OneSignalDeferred.push(async (OneSignal) => {
-      try {
-        await OneSignal.Notifications.requestPermission();
-      } catch (err) {
-        console.error(err);
-      }
-      // requestPermission si risolve anche se l'utente nega o ignora il
-      // popup del browser: il vero esito va riletto da qui, non assunto —
-      // altrimenti un permesso negato veniva comunque segnato come
-      // "attivo" e il pulsante spariva senza che nulla funzionasse davvero
-      const granted = OneSignal.Notifications.permission === true;
+    // requestPermission si risolve anche se l'utente nega o ignora il popup
+    // del browser: il vero esito arriva qui, non va assunto — altrimenti un
+    // permesso negato verrebbe comunque segnato come "attivo" e il pulsante
+    // sparirebbe senza che nulla funzioni davvero
+    requestPushPermission((granted) => {
       enablePushBtn.disabled = false;
       enablePushBtn.textContent = "Attiva notifiche push";
-      if (granted) {
-        localStorage.setItem(PUSH_ENABLED_KEY, "1");
-        syncZoneTags();
-        renderZoneList();
-      } else {
+      renderZoneList();
+      if (!granted) {
         showPushStatus(
           "Permesso non concesso. Controlla le impostazioni del sito (icona vicino all'indirizzo) e imposta le notifiche su \"Consenti\", poi riprova."
         );
       }
+    });
+  });
+
+  document.getElementById("pushPromptLater").addEventListener("click", hidePushPrompt);
+  document.getElementById("pushPromptScrim").addEventListener("click", hidePushPrompt);
+  document.getElementById("pushPromptAllow").addEventListener("click", () => {
+    const allowBtn = document.getElementById("pushPromptAllow");
+    allowBtn.disabled = true;
+    allowBtn.textContent = "Attivazione…";
+    requestPushPermission((granted) => {
+      allowBtn.disabled = false;
+      allowBtn.textContent = "Attiva notifiche";
+      renderZoneList();
+      if (granted) hidePushPrompt();
+      else showPushPrompt();
     });
   });
 

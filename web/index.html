@@ -125,6 +125,16 @@
       <p class="zone-panel-hint" id="zonePushStatus" hidden></p>
     </div>
 
+    <!-- ricompare a zona disegnata se le notifiche non sono ancora attive:
+         senza permesso la zona resterebbe muta senza che si capisca perché -->
+    <div class="ios-push-hint-scrim" id="pushPromptScrim" hidden></div>
+    <div class="ios-push-hint" id="pushPrompt" hidden role="dialog" aria-label="Attiva le notifiche pioggia">
+      <h2>Notifiche non attive</h2>
+      <p id="pushPromptText">La zona è salvata, ma senza il permesso di notifica non riceverai l'avviso quando ci piove.</p>
+      <button class="zone-btn zone-btn-primary" id="pushPromptAllow" type="button">Attiva notifiche</button>
+      <button class="zone-btn" id="pushPromptLater" type="button">Non ora</button>
+    </div>
+
     <div class="ios-push-hint-scrim" id="iosPushHintScrim" hidden></div>
     <div class="ios-push-hint" id="iosPushHint" hidden role="dialog" aria-label="Come attivare le notifiche su iPhone">
       <h2>Ricevere notifiche su iPhone</h2>
