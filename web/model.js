@@ -360,6 +360,8 @@ function speciesRainReadiness(species, env) {
     incubationTempC: null,
     tempFactor: 1,
     retention: 1,
+    amountFactor: 1,
+    timing: 1,
   };
   if (!profile || !dailyDates.length) return empty;
 
@@ -394,6 +396,13 @@ function speciesRainReadiness(species, env) {
         incubationTempC,
         tempFactor: tf,
         retention,
+        // i due pezzi in cui si scompone il contributo della pioggia:
+        // quanta ne è caduta rispetto all'ottimo della specie, e quanto
+        // siamo vicini al giorno di picco della sua buttata. Servono fuori
+        // di qui perché la spiegazione possa dire QUALE dei due sta
+        // frenando, invece di limitarsi a un punteggio complessivo
+        amountFactor,
+        timing: curve,
       };
     }
   }
