@@ -1143,6 +1143,18 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Riga di contorno: le condizioni del posto che non sono il limite
+   principale, compresse su una riga invece di una ciascuna. Sta in coda e
+   in tono minore di proposito — è informazione presente per chi la cerca,
+   non un pari grado delle righe sopra. */
+.wx-detail-aside {
+  margin: 6px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
 .wx-popup .wx-loading,
 .wx-popup .wx-error {
   display: flex;

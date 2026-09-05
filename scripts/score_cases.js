@@ -37,34 +37,51 @@ function seasonAt(sp, isoDate) {
   return model.seasonFactor(sp, new Date(isoDate + "T00:00:00"));
 }
 
+// Le griglie di pesi da provare arrivano dal chiamante. Con una sola (i
+// pesi di default) questo è il backtest normale; con molte è la ricerca dei
+// pesi, e valutarle tutte qui dentro evita di riscaricare i dati meteo per
+// ogni combinazione — è la parte lenta, e non cambia coi pesi.
+const weightings = payload.weightings || [{ name: "default", weights: model.SCORE_WEIGHTS }];
+
 const results = payload.cases.map((c) => {
   const env = c.env;
   const rainFull = model.speciesRainReadiness(c.species, env);
-  const habitat = model.speciesAffinityAt(c.species, env.vegClass, env.elevation);
+  const season = seasonAt(c.species, c.date);
 
-  const scoreNew =
-    rainFull.score *
-    habitat *
-    model.phFactor(c.species, env.ph) *
-    seasonAt(c.species, c.date) *
-    model.soilTempFactor(c.species, env.soilTempC);
+  // Stessa formula di speciesScore() in web/model.js, riscritta qui solo
+  // perché il fattore stagione va valutato alla data del caso invece che
+  // sull'orologio di sistema. Se cambia la formula là, va cambiata anche
+  // qui: è l'unico punto del backtest che non riusa il modello parola per
+  // parola, e va tenuto d'occhio.
+  const scoreWith = (w) =>
+    Math.pow(rainFull.rainScore, w.rain) *
+    Math.pow(rainFull.tempFactor, w.temp) *
+    Math.pow(rainFull.retention, w.retention) *
+    Math.pow(model.speciesAffinityAt(c.species, env.vegClass, env.elevation), w.tree) *
+    Math.pow(model.phFactor(c.species, env.ph), w.ph) *
+    Math.pow(season, w.season) *
+    Math.pow(model.soilTempFactor(c.species, env.soilTempC), w.soilTemp);
+
+  const scores = {};
+  for (const { name, weights } of weightings) scores[name] = scoreWith(weights);
 
   // il vecchio modello non conosceva né temperatura né ET0: togliendo le
   // due serie dall'env, speciesRainReadiness ricade esattamente sul
   // comportamento di prima (tempFactor e waterRetention ritornano 1)
   const rainOnly = model.speciesRainReadiness(c.species, { ...env, temp: null, et0: null });
-  const scoreOld = rainOnly.score * habitat;
+  const scoreOld = rainOnly.rainScore * model.speciesAffinityAt(c.species, env.vegClass, env.elevation);
 
   return {
     id: c.id,
     species: c.species,
     label: c.label,
-    scoreNew,
+    scores,
+    scoreNew: scores[weightings[0].name],
     scoreOld,
-    rainScore: rainFull.score,
+    rainScore: rainFull.rainScore,
     tempFactor: rainFull.tempFactor,
     retention: rainFull.retention,
-    season: seasonAt(c.species, c.date),
+    season,
     soilTempFactor: model.soilTempFactor(c.species, env.soilTempC),
     phFactor: model.phFactor(c.species, env.ph),
   };

@@ -184,6 +184,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample", type=int, default=250, help="ritrovamenti da testare")
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--cerca-pesi",
+        action="store_true",
+        help="prova griglie di esponenti sui fattori temporali e riporta i migliori",
+    )
+    parser.add_argument(
+        "--cache",
+        default=str(ROOT / "backtest_cases.json"),
+        help="dove tenere i casi già scaricati (lo scaricamento è la parte lenta)",
+    )
+    parser.add_argument("--riscarica", action="store_true", help="ignora la cache dei casi")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -213,6 +224,14 @@ def main():
     print(f"{len(dated)} ritrovamenti datati: {len(train)} per costruire le curve stagionali, {len(sample)} da testare.")
 
     train_occ = [{"properties": {"species": d["species"], "eventDate": d["date"].isoformat()}} for d in train]
+
+    cache_path = Path(args.cache)
+    if cache_path.exists() and not args.riscarica:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached.get("seed") == args.seed and cached.get("sample") == args.sample:
+            print(f"Riuso {len(cached['cases'])} casi già scaricati da {cache_path.name} (--riscarica per rifarli).")
+            run_report(cached["cases"], cached["trainOccurrences"], args)
+            return
 
     cases = []
     for i, occurrence in enumerate(sample, 1):
@@ -249,13 +268,115 @@ def main():
         print("Nessun caso costruito, mi fermo.", file=sys.stderr)
         return
 
-    tmp_in = ROOT / "backtest_cases.json"
-    tmp_out = ROOT / "backtest_scores.json"
-    tmp_in.write_text(json.dumps({"trainOccurrences": train_occ, "cases": cases}), encoding="utf-8")
-    subprocess.run(["node", str(SCORER), str(tmp_in), str(tmp_out)], check=True)
+    cache_path.write_text(
+        json.dumps({"seed": args.seed, "sample": args.sample, "trainOccurrences": train_occ, "cases": cases}),
+        encoding="utf-8",
+    )
+    run_report(cases, train_occ, args)
+
+
+def score(cases, train_occ, weightings=None):
+    """Passa i casi al modello vero (web/model.js via Node) e riprende i punteggi."""
+    payload = {"trainOccurrences": train_occ, "cases": cases}
+    if weightings:
+        payload["weightings"] = weightings
+    tmp_in = ROOT / ".backtest_in.json"
+    tmp_out = ROOT / ".backtest_out.json"
+    tmp_in.write_text(json.dumps(payload), encoding="utf-8")
+    subprocess.run(["node", str(SCORER), str(tmp_in), str(tmp_out)], check=True, capture_output=True)
     scored = json.loads(tmp_out.read_text(encoding="utf-8"))
     tmp_in.unlink()
     tmp_out.unlink()
+    return scored
+
+
+def search_weights(cases, train_occ):
+    """Cerca gli esponenti dei fattori TEMPORALI che separano meglio.
+
+    Onestà sul metodo: la griglia si sceglie su metà dei ritrovamenti e si
+    verifica sull'altra metà, mai sulla stessa. Con 250 ritrovamenti e
+    qualche centinaio di combinazioni, sceglierli e giudicarli sugli stessi
+    dati darebbe un numero gonfio che non si ripeterebbe sul campo.
+
+    I fattori di LUOGO (bosco, quota, pH) non compaiono: il backtest
+    confronta giorni diversi nello stesso punto, dove si annullano. I loro
+    pesi restano ragionati, non misurati, e il codice lo dichiara.
+    """
+    levels = [0.25, 0.5, 0.75, 1.0]
+    weightings = []
+    for season in levels:
+        for temp in levels:
+            for retention in [0.25, 0.5, 1.0]:
+                for soil in [0.25, 1.0]:
+                    name = f"s{season}_t{temp}_r{retention}_st{soil}"
+                    weightings.append(
+                        {
+                            "name": name,
+                            "weights": {
+                                "rain": 1,
+                                "tree": 1,
+                                "ph": 0.3,
+                                "season": season,
+                                "temp": temp,
+                                "retention": retention,
+                                "soilTemp": soil,
+                            },
+                        }
+                    )
+    print(f"Provo {len(weightings)} combinazioni di esponenti...")
+
+    occ_ids = sorted({c["id"].split(":")[0] for c in cases}, key=int)
+    half = len(occ_ids) // 2
+    fit_ids, check_ids = set(occ_ids[:half]), set(occ_ids[half:])
+    fit = [c for c in cases if c["id"].split(":")[0] in fit_ids]
+    check = [c for c in cases if c["id"].split(":")[0] in check_ids]
+
+    by_name = {w["name"]: w["weights"] for w in weightings}
+    scored_fit = score(fit, train_occ, weightings)
+    scored_check = score(check, train_occ, weightings)
+    rows = []
+    for name in by_name:
+        rows.append((matched_auc_key(scored_fit, name)[0], matched_auc_key(scored_check, name)[0], name))
+    rows.sort(reverse=True)
+
+    def label(name):
+        w = by_name[name]
+        return f"stagione {w['season']:.2f}  temp {w['temp']:.2f}  evap {w['retention']:.2f}  suolo {w['soilTemp']:.2f}"
+
+    print(f"\nMigliori 10 sulla metà di scelta ({len(fit_ids)} ritrovamenti, verifica su {len(check_ids)}):")
+    print(f"  {'esponenti':<48}{'scelta':>9}{'verifica':>10}")
+    for auc_fit, auc_check, name in rows[:10]:
+        print(f"  {label(name):<48}{auc_fit:>9.3f}{auc_check:>10.3f}")
+
+    # Quanto conta davvero ogni scelta: se lo scarto fra il migliore e il
+    # peggiore di un fattore è dentro il rumore, quel peso non è misurato
+    # e sceglierlo al terzo decimale è illudersi.
+    print("\nSensibilità di ciascun esponente (AUC sulla metà di verifica):")
+    for factor in ["season", "temp", "retention", "soilTemp"]:
+        vals = sorted({by_name[n][factor] for n in by_name})
+        line = []
+        for v in vals:
+            aucs = [c for _, c, n in rows if by_name[n][factor] == v]
+            line.append(f"{v:.2f}:{max(aucs):.3f}")
+        print(f"  {factor:<12}{'   '.join(line)}")
+
+    best = by_name[rows[0][2]]
+    print(f"\nMigliore sulla metà di scelta: {best}")
+    print(f"AUC sulla metà di verifica: {rows[0][1]:.3f}")
+    return best
+
+
+def matched_auc_key(rows, key):
+    """Come matched_auc ma leggendo rows[i]['scores'][key]."""
+    flat = [{**r, "_v": r["scores"][key]} for r in rows]
+    return matched_auc(flat, "_v")
+
+
+def run_report(cases, train_occ, args):
+    if args.cerca_pesi:
+        search_weights(cases, train_occ)
+        return
+    scored = score(cases, train_occ)
 
     print("\n" + "=" * 70)
     print("AUC appaiata — probabilità che il giorno del ritrovamento vero batta")
@@ -289,6 +410,25 @@ def main():
     # che sta separando. Utile davvero è solo il fattore con uno SCARTO fra
     # le due colonne; uno che vale 1.00 in entrambe non sta facendo niente e
     # andrebbe tolto invece di restare come complicazione gratuita.
+    # SOGLIE DEGLI ALERT, calibrate su cosa succede DAVVERO dove i funghi
+    # sono stati trovati. Fino a ieri erano numeri scelti guardando la
+    # distribuzione sulla griglia e chiedendosi quante celle finissero in
+    # verde: un criterio estetico. Qui invece "pronto" significa una cosa
+    # verificabile — le condizioni assomigliano a quelle in cui la gente
+    # questo fungo lo ha trovato per davvero.
+    real_scores = sorted(r["scoreNew"] for r in scored if r["label"] == "reale")
+    if real_scores:
+        def pct(p):
+            return real_scores[min(len(real_scores) - 1, int(p * len(real_scores)))]
+
+        print("\nSoglie suggerite per gli alert, dai punteggi dei ritrovamenti veri:")
+        print(f"  mediana dei ritrovamenti      {pct(0.50):.3f}   -> soglia \"pronto\"")
+        print(f"  primo quartile                {pct(0.25):.3f}   -> soglia \"in arrivo\"")
+        print(f"  decimo percentile             {pct(0.10):.3f}")
+        ctrl = sorted(r["scoreNew"] for r in scored if r["label"] == "controllo")
+        if ctrl:
+            print(f"  (mediana dei controlli        {ctrl[len(ctrl) // 2]:.3f})")
+
     real = [r for r in scored if r["label"] == "reale"]
     controls = [r for r in scored if r["label"] == "controllo"]
     if real and controls:

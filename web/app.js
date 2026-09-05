@@ -187,17 +187,32 @@ function speciesReadinessList(env) {
     .sort((a, b) => b.score - a.score);
 }
 
-/* Il punteggio è un prodotto di fattori tutti <= 1 (finestra di pioggia,
-   temperatura di incubazione, evaporazione, bosco, quota, pH, stagione,
-   temperatura del suolo), quindi le soglie vanno lette così: "pronto"
-   richiede che NESSUN fattore sia messo male — tipicamente pioggia ~0.6 x
-   bosco ~0.8 x stagione ~0.7 ~= 0.34; "in arrivo" tollera un fattore
-   mediocre. Erano 0.45/0.18 quando i fattori erano solo due: con sei, le
-   stesse soglie lasciavano 2 celle su 188 in verde ai primi di settembre,
-   cioè nascondevano un'informazione vera invece di riassumerla. */
+/* SOGLIE DEGLI ALERT — calibrate, non scelte.
+
+   Prima erano numeri presi guardando la distribuzione sulla griglia e
+   chiedendosi quante celle finissero in verde: un criterio estetico, che
+   non voleva dire niente per chi legge.
+
+   Ora vengono dal backtest e hanno un significato verificabile. Sono i
+   percentili dei punteggi calcolati SUI RITROVAMENTI VERI, cioè su luoghi e
+   giorni in cui quel fungo è stato davvero raccolto:
+     - "pronto"    = mediana dei ritrovamenti. Metà delle raccolte reali è
+                     avvenuta in condizioni almeno così buone.
+     - "in arrivo" = primo quartile. Sotto questa soglia si sta sotto il 75%
+                     delle raccolte reali.
+   Per confronto, la mediana dei giorni di controllo (stesso posto, stagione
+   diversa) è 0.022: sta ben sotto anche la soglia bassa, che è esattamente
+   ciò che serve perché il semaforo distingua qualcosa.
+
+   Vanno rifatte con scripts/backtest_model.py ogni volta che cambiano i
+   pesi o i fattori: sono conseguenze della scala del punteggio, non
+   costanti indipendenti. */
+const READY_THRESHOLD = 0.185;
+const SOON_THRESHOLD = 0.043;
+
 function speciesStatusBadge(r) {
-  if (r.score >= 0.3) return { word: "pronto", cls: "ready" };
-  if (r.score >= 0.12) return { word: "in arrivo", cls: "soon" };
+  if (r.score >= READY_THRESHOLD) return { word: "pronto", cls: "ready" };
+  if (r.score >= SOON_THRESHOLD) return { word: "in arrivo", cls: "soon" };
   return { word: "non ora", cls: "none" };
 }
 
@@ -310,219 +325,167 @@ function fmtDateRangeProse(startIso, endIso) {
 function speciesDetailHtml(r) {
   const profile = SPECIES_RAIN_PROFILE[r.sp];
   const cited = speciesCitedEvent(r);
-  const facts = [];
-  let verdict;
-  let cls;
-
-  // Questo primo blocco costruisce solo i FATTI sulla pioggia. Il verdetto
-  // in cima non si decide qui: lo detta il semaforo, più sotto.
-  if (cited && cited.kind === "incubated") {
-    const from = addDays(cited.eventDate, profile.incubationMin);
-    const to = addDays(cited.eventDate, profile.incubationMax);
-    const peak = addDays(cited.eventDate, profile.incubationPeak);
-    const shortNote = r.metThreshold ? "" : ` invece dei ${profile.minRainMm} che servono`;
-    facts.push([ICONS.rain, `<b>${cited.mm}mm</b> ${fmtDateRangeProse(cited.windowStartDate, cited.eventDate)}${shortNote} — le barre evidenziate qui sopra`]);
-    facts.push([
-      ICONS.timer,
-      r.metThreshold
-        ? `Finestra buona <b>${fmtDateRangeProse(from, to)}</b>, al meglio verso ${articleFor("il", peak)}${fmtDateShort(peak)}`
-        : `Serve una pioggia da <b>${profile.minRainMm}mm in ${profile.windowDays} giorni</b> per una vera buttata`,
-    ]);
-  } else if (cited) {
-    // è piovuto eccome, ma è ancora presto: dire "non è piovuto" qui era
-    // il caso in cui il testo contraddiceva più vistosamente il grafico
-    const from = addDays(cited.eventDate, profile.incubationMin);
-    const to = addDays(cited.eventDate, profile.incubationMax);
-    facts.push([ICONS.rain, `<b>${cited.mm}mm</b> ${fmtDateRangeProse(cited.windowStartDate, cited.eventDate)}: la pioggia è arrivata`]);
-    facts.push([ICONS.timer, `Ma servono ${profile.incubationMin}-${profile.incubationMax} giorni perché escano: attesi <b>${fmtDateRangeProse(from, to)}</b>`]);
-  } else {
-    facts.push([ICONS.rain, `Mai <b>${profile.minRainMm}mm</b> in ${profile.windowDays} giorni nel periodo del grafico`]);
-    facts.push([ICONS.timer, `Quando piove abbastanza, i funghi escono ${profile.incubationMin}-${profile.incubationMax} giorni dopo`]);
-  }
-
-  // Evaporazione: risponde al "ma allora perché non ci sono, se è piovuto?".
-  // Solo per una pioggia già incubata — su una appena caduta non ha ancora
-  // senso — e solo quando ha davvero morso, altrimenti è rumore.
-  if (cited && cited.kind === "incubated" && cited.retention != null && cited.retention < 0.7) {
-    facts.push([
-      ICONS.humidity,
-      cited.retention <= 0.2
-        ? "Ma sole e vento l'hanno quasi tutta riasciugata"
-        : `Ma il sole ne ha già ripresa circa <b>${Math.round((1 - cited.retention) * 100)}%</b>`,
-    ]);
-  }
-
-  // Temperatura: è il fattore che la letteratura indica come più vincolante
-  // della pioggia a breve termine, quindi si mostra sempre quando il dato
-  // c'è. Va letta sui giorni dell'evento CITATO: per una pioggia incubata è
-  // la media dell'attesa, per una appena caduta è quella di questi giorni.
-  const citedTempC = cited ? cited.incubationTempC : r.incubationTempC;
-  const citedTempFactor = (cited ? cited.tempFactor : r.tempFactor) ?? 1;
-  if (citedTempC != null) {
-    const judgement =
-      citedTempFactor >= 0.75
-        ? "in pieno nella sua forbice"
-        : citedTempC > profile.tempOptimumC
-          ? `troppo caldo (ideale ~${profile.tempOptimumC}°C)`
-          : `troppo fresco (ideale ~${profile.tempOptimumC}°C)`;
-    const when = cited && cited.kind === "pending" ? "in questi giorni" : "di media durante l'attesa";
-    facts.push([ICONS.thermometer, `<b>${Math.round(citedTempC)}°C</b> ${when}: ${judgement}`]);
-  }
-
-  // Suolo troppo freddo: blocca l'avvio a monte, quindi va detto anche
-  // quando pioggia e bosco sono perfetti
-  if (r.soilTempC != null && r.soilTempFactor < 1) {
-    facts.push([
-      ICONS.thermometer,
-      `Terreno a <b>${Math.round(r.soilTempC)}°C</b>: sotto i ${profile.soilTempMinC}°C che servono per far partire i primordi`,
-    ]);
-  }
-
-  // Stagione, dalle date reali dei ritrovamenti di questa specie
-  if (r.season != null && r.season < 0.6) {
-    const window = seasonWindowLabel(r.sp);
-    facts.push([
-      ICONS.calendar,
-      window
-        ? `Fuori dal suo periodo: di solito si trova ${window}`
-        : "Fuori dal periodo in cui questa specie si trova di solito",
-    ]);
-  }
-
-  // Il bosco è l'altra metà del giudizio: senza questa riga un "non ora" su
-  // una zona ben piovuta sembrava un errore del sito. Il verdetto lo scavalca
-  // solo quando il bosco è davvero il fattore che blocca tutto — mai quando
-  // il dato manca, che è ignoranza nostra e non un'informazione sul posto.
-  if (r.vegClass == null) {
-    facts.push([ICONS.forest, "Tipo di bosco non rilevato in questo punto"]);
-  } else if (r.vegClass === "none") {
-    facts.push([ICONS.forest, "Senza alberi simbionti non nascono, per quanto piova"]);
-  } else if (r.tree < 0.3) {
-    facts.push([ICONS.forest, "Qui è raro anche col tempo perfetto: cerca il bosco giusto per questa specie"]);
-  } else if (r.tree < 0.6) {
-    facts.push([ICONS.forest, "Bosco solo in parte adatto a questa specie"]);
-  } else {
-    facts.push([ICONS.forest, "Bosco adatto a questa specie"]);
-  }
-
-  // pH: modula, non decide — per questo la riga informa e solo un valore
-  // davvero fuori campo arriva a cambiare il verdetto
-  if (r.ph != null) {
-    facts.push([
-      ICONS.ph,
-      r.phFactor >= 0.85
-        ? `Suolo ${phLabel(r.ph).split(" · ")[1]} (pH ${r.ph.toFixed(1)}), come piace a questa specie`
-        : `Suolo ${phLabel(r.ph).split(" · ")[1]} (pH ${r.ph.toFixed(1)}): questa specie preferisce intorno a pH ${profile.phOptimum.toFixed(1)}`,
-    ]);
-  }
-
-  /* IL VERDETTO SEGUE IL SEMAFORO, SEMPRE.
-
-     Prima non era così: il verdetto usciva da una catena di if sul solo
-     TEMPISMO della pioggia ("quanti giorni dall'evento rispetto al picco"),
-     e i fattori restanti potevano al massimo scavalcarlo se sfondavano
-     soglie fisse (bosco < 0.3, stagione < 0.25, temperatura < 0.3...). Ma
-     il punteggio è un PRODOTTO: bastavano tre fattori mediocri e nessuno
-     sotto la sua soglia — per esempio ritenzione 0.23 x temperatura 0.45 x
-     stagione 0.71 — per avere un punteggio da "non ora" accanto a un
-     "Ci siamo: è il momento giusto". Succedeva in 22 casi su 544, ed è
-     esattamente la contraddizione che l'utente vedeva.
-
-     Ora la fonte è una sola: speciesStatusBadge(), lo stesso semaforo della
-     riga chiusa. Il verdetto non decide più se le cose vanno bene — lo
-     legge — e si limita a NOMINARE il fattore che pesa di più, scelto
-     confrontando i fattori fra loro invece che con soglie scritte a mano.
-     Il confronto è lecito perché sono tutti moltiplicativi in 0-1: il più
-     piccolo è davvero quello che sta frenando di più. */
   const badge = speciesStatusBadge(r);
-  cls = badge.cls;
-
-  // "in arrivo" e "non ora" dicono la stessa cosa con forza diversa: la
-  // prima frase è una riserva, la seconda un no.
   const soon = badge.cls === "soon";
+  const pct = (x) => Math.round(x * 100);
+
+  /* I FATTORI CHE FRENANO, ciascuno con due formulazioni: un titolo breve
+     per il verdetto in cima e una riga con il numero che lo giustifica.
+     Sono tutti moltiplicativi in 0-1, quindi confrontarli fra loro è
+     lecito: il più piccolo è davvero quello che sta abbassando di più il
+     punteggio, e sceglierlo così evita la catena di soglie scritte a mano
+     che prima faceva divergere verdetto e semaforo. */
   const limits = [];
-  const add = (value, phrase) => {
-    if (value != null) limits.push({ value, phrase });
+  const add = (value, icon, headline, detail) => {
+    if (value != null) limits.push({ value, icon, headline, detail });
   };
 
   if (r.vegClass != null && r.vegClass !== "none") {
-    add(r.tree, soon ? "Bosco solo in parte adatto" : "Non è il suo bosco");
+    add(
+      r.tree,
+      ICONS.forest,
+      soon ? "Bosco solo parzialmente adatto" : "Bosco non adatto alla specie",
+      soon ? "Il bosco qui è adatto solo in parte" : "Qui la specie è rara anche in condizioni ottimali"
+    );
   }
 
   const seasonWindow = seasonWindowLabel(r.sp);
-  const seasonPhrase = soon
-    ? "Non è ancora il suo periodo migliore"
-    : seasonWindow
-      ? `Fuori stagione: si trova ${seasonWindow}`
-      : "Fuori stagione per questa specie";
-  add(r.season, seasonPhrase);
+  const seasonHeadline = soon ? "Periodo di fruttificazione non ancora nel pieno" : "Fuori dal periodo di fruttificazione";
+  add(
+    r.season,
+    ICONS.calendar,
+    seasonHeadline,
+    seasonWindow ? `Periodo abituale della specie: ${seasonWindow}` : "Fuori dal periodo abituale della specie"
+  );
 
+  const citedTempC = cited ? cited.incubationTempC : r.incubationTempC;
+  const citedTempFactor = (cited ? cited.tempFactor : r.tempFactor) ?? 1;
   if (citedTempC != null) {
-    const tooWarm = citedTempC > profile.tempOptimumC;
+    const warm = citedTempC > profile.tempOptimumC;
     add(
       citedTempFactor,
-      soon
-        ? `Temperatura ancora lontana dai ~${profile.tempOptimumC}°C che preferisce`
-        : tooWarm
-          ? "Troppo caldo per questa specie"
-          : "Troppo freddo per questa specie"
+      ICONS.thermometer,
+      warm ? "Temperatura sopra l'ottimale" : "Temperatura sotto l'ottimale",
+      `Media di ${Math.round(citedTempC)}°C nel periodo utile, contro i ${profile.tempOptimumC}°C ottimali`
     );
   }
 
   if (r.soilTempC != null) {
-    add(r.soilTempFactor, soon ? "Terreno ancora freddo" : "Terreno troppo freddo per far partire i primordi");
-  }
-
-  if (cited && cited.kind === "incubated") {
-    add(cited.retention, soon ? "Buona parte di quella pioggia è già evaporata" : "Quella pioggia è già evaporata");
-    add(cited.amountFactor, soon ? "Pioggia un po' scarsa per questa specie" : "Pioggia troppo scarsa per questa specie");
-    const late = cited.daysSince > profile.incubationPeak;
     add(
-      cited.timing,
-      late
-        ? soon
-          ? "Ultimi giorni utili"
-          : "Il momento buono è passato"
-        : soon
-          ? "Stanno cominciando a spuntare"
-          : `Ancora presto: il meglio è verso ${articleFor("il", addDays(cited.eventDate, profile.incubationPeak))}${fmtDateShort(addDays(cited.eventDate, profile.incubationPeak))}`
+      r.soilTempFactor,
+      ICONS.thermometer,
+      "Suolo troppo freddo per l'avvio della fruttificazione",
+      `Suolo a ${Math.round(r.soilTempC)}°C, sotto i ${profile.soilTempMinC}°C richiesti`
     );
   }
 
-  if (badge.cls === "ready") {
-    // il punteggio dice che tutto è a posto: nessun "ma"
-    const late = cited && cited.kind === "incubated" && cited.daysSince > profile.incubationPeak + 2;
-    verdict = late ? "Ci siamo, ma sono gli ultimi giorni" : "Ci siamo: è il momento giusto";
-  } else if (r.vegClass === "none") {
-    // Tre casi hanno la precedenza sul "fattore più debole", in quest'ordine,
-    // perché non sono "un fattore un po' basso" ma ostacoli di natura
-    // diversa, e chi legge deve sapere prima quello che non cambierà presto:
-    // il bosco è una proprietà del posto e non cambia mai; la stagione
-    // cambia fra mesi; la pioggia può arrivare la settimana prossima. Dire
-    // "non è piovuto abbastanza" in mezzo a una città inviterebbe a tornarci
-    // dopo un temporale, che è il consiglio sbagliato.
-    verdict = "Qui non c'è bosco";
-  } else if (r.season < 0.25) {
-    verdict = seasonPhrase;
-  } else if (cited && cited.kind === "pending") {
-    // non è un fattore debole, è una data: concorda già col semaforo
-    // (finché i funghi non sono usciti il punteggio resta basso) e dice
-    // l'unica cosa utile, cioè quando tornare
-    verdict = `Troppo presto: torna ${articleFor("dal", addDays(cited.eventDate, profile.incubationMin))}${fmtDateShort(addDays(cited.eventDate, profile.incubationMin))}`;
-  } else if (!cited) {
-    verdict = "Non è piovuto abbastanza";
-  } else {
-    // fra i fattori restanti vince il più piccolo, ed è un confronto lecito
-    // perché sono tutti moltiplicativi in 0-1: il più basso è davvero quello
-    // che sta abbassando il punteggio di più
-    limits.sort((a, b) => a.value - b.value);
-    verdict = limits.length ? limits[0].phrase : soon ? "Ci manca poco" : "Condizioni non ancora buone";
+  if (cited && cited.kind === "incubated") {
+    add(
+      cited.retention,
+      ICONS.humidity,
+      "Pioggia in gran parte evaporata",
+      `Evaporato circa il ${pct(1 - cited.retention)}% di quella pioggia prima della fruttificazione`
+    );
+    add(
+      cited.amountFactor,
+      ICONS.rain,
+      "Precipitazioni insufficienti per la specie",
+      `${cited.mm} mm contro i ${profile.minRainMm} mm che la specie richiede`
+    );
+    const peak = addDays(cited.eventDate, profile.incubationPeak);
+    const late = cited.daysSince > profile.incubationPeak;
+    add(
+      cited.timing,
+      ICONS.timer,
+      late ? "Periodo di fruttificazione concluso" : "Fruttificazione non ancora avviata",
+      late
+        ? `Il massimo era ${articleFor("il", peak)}${fmtDateShort(peak)}`
+        : `Massimo previsto ${articleFor("il", peak)}${fmtDateShort(peak)}`
+    );
   }
 
-  const rows = facts.map(([icon, text]) => `<li>${icon}<span>${text}</span></li>`).join("");
+  /* IL VERDETTO SEGUE IL SEMAFORO, SEMPRE — stessa fonte della riga chiusa
+     (speciesStatusBadge). Non giudica: legge, e nomina il motivo.
+
+     Tre casi hanno la precedenza sul "fattore più debole", in quest'ordine,
+     perché non sono un fattore un po' basso ma ostacoli di natura diversa,
+     e chi legge deve sapere per primo ciò che non cambierà presto: il bosco
+     è una proprietà del posto e non cambia mai, la stagione cambia fra
+     mesi, la pioggia può arrivare la settimana prossima. Senza questa
+     gerarchia, in mezzo a una città si leggeva "non è piovuto abbastanza",
+     cioè un invito a tornarci dopo un temporale. */
+  let headline;
+  let limit = null;
+  if (badge.cls === "ready") {
+    const late = cited && cited.kind === "incubated" && cited.daysSince > profile.incubationPeak + 2;
+    headline = late ? "Condizioni favorevoli, negli ultimi giorni utili" : "Condizioni favorevoli";
+  } else if (r.vegClass === "none") {
+    headline = "Assenza di bosco";
+  } else if (r.season < 0.25) {
+    headline = seasonHeadline;
+    limit = limits.find((l) => l.icon === ICONS.calendar) || null;
+  } else if (cited && cited.kind === "pending") {
+    const from = addDays(cited.eventDate, profile.incubationMin);
+    headline = `Pioggia troppo recente, attesa fino ${articleFor("al", from)}${fmtDateShort(from)}`;
+  } else if (!cited) {
+    headline = "Precipitazioni insufficienti nel periodo osservato";
+  } else {
+    limits.sort((a, b) => a.value - b.value);
+    limit = limits[0] || null;
+    headline = limit ? limit.headline : "Condizioni non ancora favorevoli";
+  }
+  // con "in arrivo" il titolo è una riserva, con "non ora" un no: stessa
+  // informazione, forza diversa, e nessun caso resta senza la sfumatura
+  const verdict = soon ? `Condizioni parziali — ${headline.charAt(0).toLowerCase() + headline.slice(1)}` : headline;
+
+  /* LE RIGHE. Prima erano fino a sei, una per ogni dato disponibile, e il
+     risultato era dispersivo: chi legge doveva estrarre da solo cosa
+     contava. Ora sono al massimo tre più una riga di contorno — la pioggia
+     che il grafico evidenzia, quando aspettarsi i funghi, e il numero che
+     giustifica il verdetto — e il resto delle condizioni sta compresso in
+     coda, presente per chi lo cerca ma senza competere con le prime. */
+  const rows = [];
+  if (cited) {
+    rows.push([
+      ICONS.rain,
+      `<b>${cited.mm} mm</b> ${fmtDateRangeProse(cited.windowStartDate, cited.eventDate)}${
+        cited.kind === "incubated" ? ", evidenziati nel grafico" : ""
+      }`,
+    ]);
+    const from = addDays(cited.eventDate, profile.incubationMin);
+    const to = addDays(cited.eventDate, profile.incubationMax);
+    const peak = addDays(cited.eventDate, profile.incubationPeak);
+    rows.push([
+      ICONS.timer,
+      r.metThreshold || cited.kind === "pending"
+        ? `Emersione prevista <b>${fmtDateRangeProse(from, to)}</b>, con il massimo ${articleFor("il", peak)}${fmtDateShort(peak)}`
+        : `Soglia della specie: <b>${profile.minRainMm} mm in ${profile.windowDays} giorni</b>`,
+    ]);
+  } else {
+    rows.push([ICONS.rain, `Mai <b>${profile.minRainMm} mm</b> in ${profile.windowDays} giorni nel periodo osservato`]);
+    rows.push([
+      ICONS.timer,
+      `Attesa tipica dopo una pioggia sufficiente: <b>${profile.incubationMin}-${profile.incubationMax} giorni</b>`,
+    ]);
+  }
+  if (limit && limit.detail) rows.push([limit.icon, limit.detail]);
+
+  // Contorno: le condizioni del posto che non sono il limite principale,
+  // su una riga sola invece che una per ciascuna.
+  const aside = [];
+  if (r.vegClass == null) aside.push("bosco non rilevato");
+  else if (r.vegClass !== "none" && (!limit || limit.icon !== ICONS.forest)) {
+    aside.push(r.tree >= 0.6 ? "bosco adatto" : "bosco parzialmente adatto");
+  }
+  if (r.ph != null) aside.push(`pH ${r.ph.toFixed(1)} (${phLabel(r.ph).split(" · ")[1]})`);
+  if (r.soilTempC != null && (!limit || limit.icon !== ICONS.thermometer)) {
+    aside.push(`suolo ${Math.round(r.soilTempC)}°C`);
+  }
+
   return `
-    <p class="wx-detail-verdict wx-detail-${cls}">${verdict}</p>
-    <ul class="wx-detail-facts">${rows}</ul>`;
+    <p class="wx-detail-verdict wx-detail-${badge.cls}">${verdict}</p>
+    <ul class="wx-detail-facts">${rows.map(([icon, text]) => `<li>${icon}<span>${text}</span></li>`).join("")}</ul>
+    ${aside.length ? `<p class="wx-detail-aside">${aside.join(" · ")}</p>` : ""}`;
 }
 
 const MODE_LABELS = {

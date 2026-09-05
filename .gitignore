@@ -4,3 +4,5 @@ __pycache__/
 .DS_Store
 .claude/
 .impeccable/
+backtest_cases.json
+backtest_scores.json

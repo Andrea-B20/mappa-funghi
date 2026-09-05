@@ -362,6 +362,7 @@ function speciesRainReadiness(species, env) {
     retention: 1,
     amountFactor: 1,
     timing: 1,
+    rainScore: 0.05,
   };
   if (!profile || !dailyDates.length) return empty;
 
@@ -392,6 +393,11 @@ function speciesRainReadiness(species, env) {
         eventMm: Math.round(sums[i]),
         eventDate: dailyDates[i],
         windowStartDate: dailyDates[windowStartIdx],
+        // punteggio dell'evento come criterio di SCELTA fra piogge
+        // candidate (qui i fattori pesano uguale, è solo un confronto fra
+        // eventi dello stesso punto); il punteggio finale della specie li
+        // ripesa invece secondo SCORE_WEIGHTS, vedi speciesScore()
+        rainScore: curve * amountFactor,
         metThreshold: sums[i] >= profile.minRainMm,
         incubationTempC,
         tempFactor: tf,
@@ -435,7 +441,15 @@ function speciesRainReadiness(species, env) {
 
   // pavimento 0.05: mai un vero zero, ma un evento debole/assente resta
   // comunque nettamente sotto un evento forte e ben temporizzato
-  return { ...best, pending, score: Math.max(0.05, best.score) };
+  return {
+    ...best,
+    pending,
+    score: Math.max(0.05, best.score),
+    // pavimento anche sul solo contributo pioggia: senza, un punto senza
+    // piogge utili varrebbe zero secco e sparirebbe dalla mappa invece di
+    // restare nettamente sotto a uno con la pioggia giusta
+    rainScore: Math.max(0.05, best.rainScore ?? 0),
+  };
 }
 
 // Condizioni generali del punto adesso: quanta acqua c'è davvero nel
@@ -466,19 +480,57 @@ function conditionsQuality(soilMoisture, humidityPct, soilMoistureDeep = null, h
   return Math.max(0, Math.min(1, 0.5 * soilW + 0.5 * humW));
 }
 
+/* PESI DEI FATTORI.
+
+   Il punteggio era un prodotto puro: ogni fattore con esponente 1, cioè
+   tutti importanti uguale. Non è giustificato — l'assenza dell'albero
+   simbionte e un pH un po' fuori misura non possono pesare lo stesso — e
+   in pratica la temperatura mordeva quanto il bosco.
+
+   Qui ogni fattore ha un esponente. Sotto 1 il fattore si ammorbidisce
+   (0.5 è la radice quadrata: 0.25 diventa 0.5), sopra 1 si irrigidisce.
+   Resta una media geometrica pesata, quindi la proprietà che serve è
+   salva: un fattore a zero azzera comunque tutto, perché senza bosco non
+   ci sono funghi per quanto sia perfetto il resto.
+
+   Da dove vengono i numeri. I fattori TEMPORALI sono stati scelti col
+   backtest (vedi scripts/backtest_model.py --cerca-pesi): confrontando
+   griglie di esponenti sull'AUC di una metà dei ritrovamenti e verificando
+   sull'altra metà, mai sulla stessa. I fattori di LUOGO non sono
+   misurabili così, perché il backtest confronta giorni diversi nello
+   stesso punto e lì bosco, quota e pH si annullano: quelli restano
+   ragionati, ed è giusto dirlo invece di far finta che siano misurati.
+     - tree = 1: necessità biologica, non una preferenza. Senza il
+       simbionte il fungo non esiste, quindi nessun ammorbidimento.
+     - ph = 0.3: il fattore su cui abbiamo meno certezza (convenzione di
+       misura diversa dalla letteratura, media su 250m, mai validato).
+       Deve poter spostare il giudizio di poco e nient'altro. */
+const SCORE_WEIGHTS = {
+  rain: 1,
+  tree: 1,
+  season: 1,
+  temp: 0.75,
+  retention: 0.25,
+  soilTemp: 0.5,
+  ph: 0.3,
+};
+
 // Il punteggio completo di una specie in un punto: pioggia nella finestra
 // giusta (già pesata per temperatura di incubazione ed evaporazione) × bosco
 // adatto × quota × pH del suolo × stagione × suolo abbastanza caldo. Un
 // unico posto, usato sia dai colori della mappa sia dal popup, così le due
 // cose non possono raccontare storie diverse sullo stesso punto.
-function speciesScore(sp, env, rain = null) {
+function speciesScore(sp, env, rain = null, weights = SCORE_WEIGHTS) {
   const r = rain || speciesRainReadiness(sp, env);
+  const w = weights;
   return (
-    r.score *
-    speciesAffinityAt(sp, env.vegClass, env.elevation) *
-    phFactor(sp, env.ph) *
-    seasonFactor(sp) *
-    soilTempFactor(sp, env.soilTempC)
+    Math.pow(r.rainScore, w.rain) *
+    Math.pow(r.tempFactor, w.temp) *
+    Math.pow(r.retention, w.retention) *
+    Math.pow(speciesAffinityAt(sp, env.vegClass, env.elevation), w.tree) *
+    Math.pow(phFactor(sp, env.ph), w.ph) *
+    Math.pow(seasonFactor(sp), w.season) *
+    Math.pow(soilTempFactor(sp, env.soilTempC), w.soilTemp)
   );
 }
 
@@ -511,5 +563,6 @@ if (typeof module !== "undefined" && module.exports) {
     speciesRainReadiness,
     conditionsQuality,
     speciesScore,
+    SCORE_WEIGHTS,
   };
 }
