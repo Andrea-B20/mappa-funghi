@@ -123,7 +123,7 @@ async function fetchClcVegClass(lat, lon) {
      lungo, non solo l'ultimo acquazzone)
 
    La somma è una somma mobile SEMPLICE sui mm reali del grafico "Pioggia
-   ultimi 15gg" — non un indice smussato — apposta perché il numero mostrato
+   ultimi giorni" — non un indice smussato — apposta perché il numero mostrato
    nella spiegazione di ogni specie sia lo stesso che si può verificare a
    occhio sommando le barre del grafico (in precedenza usavamo un indice a
    decadimento esponenziale: matematicamente più elegante, ma restituiva un
@@ -135,6 +135,13 @@ const SPECIES_RAIN_PROFILE = {
   ovolo: { minRainMm: 20, optimalRainMm: 34, incubationMin: 8, incubationPeak: 11, incubationMax: 16, windowDays: 8 },
   gallinaccio: { minRainMm: 12, optimalRainMm: 22, incubationMin: 4, incubationPeak: 6, incubationMax: 12, windowDays: 4 },
 };
+
+// Giorni di storico pioggia che il popup usa (grafico + analisi specie).
+// Tenuto uguale alla finestra della griglia meteo (PAST_DAYS=16 + il giorno
+// corrente in scripts/fetch_weather_grid.py): popup e colori della mappa
+// devono giudicare sugli stessi giorni, altrimenti raccontano storie diverse
+// sullo stesso punto.
+const POPUP_RAIN_DAYS = 17;
 
 // Somma mobile sui windowDays precedenti (inclusi): result[i] = somma di
 // dailyPrecip da i-windowDays+1 a i.
@@ -174,6 +181,7 @@ function speciesRainReadiness(species, dailyDates, dailyPrecip) {
     eventDate: null,
     windowStartDate: null,
     metThreshold: false,
+    pending: null,
   };
   if (!profile || !dailyDates || !dailyDates.length) return empty;
 
@@ -200,9 +208,29 @@ function speciesRainReadiness(species, dailyDates, dailyPrecip) {
       };
     }
   }
+  // Pioggia che ha già superato la soglia della specie ma è caduta troppo
+  // di recente perché i funghi siano usciti: il punteggio resta (giustamente)
+  // basso, ma senza registrarla la spiegazione direbbe "non è piovuto
+  // abbastanza" mentre nel grafico si vedono barre alte — la contraddizione
+  // più confondente del popup.
+  let pending = null;
+  for (let i = todayIdx; i >= 0; i--) {
+    const daysSince = todayIdx - i;
+    if (daysSince >= profile.incubationMin) break;
+    if (sums[i] < profile.minRainMm) continue;
+    if (!pending || sums[i] > pending.mm) {
+      pending = {
+        mm: Math.round(sums[i]),
+        daysSince,
+        eventDate: dailyDates[i],
+        windowStartDate: dailyDates[Math.max(0, i - profile.windowDays + 1)],
+      };
+    }
+  }
+
   // pavimento 0.05: mai un vero zero, ma un evento debole/assente resta
   // comunque nettamente sotto un evento forte e ben temporizzato
-  return { ...best, score: Math.max(0.05, best.score) };
+  return { ...best, pending, score: Math.max(0.05, best.score) };
 }
 
 function conditionsQuality(soilMoisture, humidityPct) {
@@ -235,7 +263,9 @@ function speciesReadinessList(dailyDates, dailyPrecip, vegClass, elevation) {
     .map((sp) => {
       const rain = speciesRainReadiness(sp, dailyDates, dailyPrecip);
       const tree = speciesAffinityAt(sp, vegClass, elevation);
-      return { sp, label: SPECIES_META[sp].label, color: SPECIES_META[sp].color, ...rain, score: rain.score * tree };
+      // "tree"/"vegClass" viaggiano insieme al resto: la spiegazione deve
+      // poter dire che un "non ora" dipende dal bosco e non dalla pioggia
+      return { sp, label: SPECIES_META[sp].label, color: SPECIES_META[sp].color, ...rain, tree, vegClass, score: rain.score * tree };
     })
     .sort((a, b) => b.score - a.score);
 }
@@ -246,41 +276,179 @@ function speciesStatusBadge(r) {
   return { word: "non ora", cls: "none" };
 }
 
+// Somma giorni a una data ISO restando in fuso locale: toISOString()
+// riporterebbe indietro di un giorno con offset positivi (mezzanotte
+// locale in Italia = 22:00 UTC del giorno prima).
+function addDays(iso, n) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function fmtDateShort(iso) {
   if (!iso) return null;
-  return new Date(iso + "T00:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "long" });
+  const d = new Date(iso + "T00:00:00");
+  const day = d.getDate() === 1 ? "1°" : d.getDate();
+  return `${day} ${d.toLocaleDateString("it-IT", { month: "long" })}`;
 }
 
-// "14 – 20 agosto" se stesso mese, altrimenti "28 luglio – 3 agosto".
-function fmtDateRange(startIso, endIso) {
-  if (!startIso || !endIso) return fmtDateShort(endIso);
-  if (startIso === endIso) return fmtDateShort(endIso);
+// "dall'8 settembre", non "dal 8 settembre": davanti a otto e undici
+// l'articolo si elide, e senza questo le frasi sembrano tradotte male.
+const ARTICLES = { il: ["il ", "l'"], dal: ["dal ", "dall'"], al: ["al ", "all'"] };
+function articleFor(prep, iso) {
+  const day = new Date(iso + "T00:00:00").getDate();
+  const [plain, elided] = ARTICLES[prep];
+  return day === 8 || day === 11 ? elided : plain;
+}
+
+// Mesi abbreviati ("28 ago – 4 set"): serve solo alla didascalia del
+// grafico, che sta su una riga sola accanto al titolo e con i mesi per
+// esteso mandava l'intestazione a capo.
+function fmtDateRangeCompact(startIso, endIso) {
+  const opts = { day: "numeric", month: "short" };
+  const fmt = (iso) => new Date(iso + "T00:00:00").toLocaleDateString("it-IT", opts).replace(".", "");
+  if (!startIso || startIso === endIso) return fmt(endIso);
   const start = new Date(startIso + "T00:00:00");
   const end = new Date(endIso + "T00:00:00");
-  const sameMonth = start.getMonth() === end.getMonth();
-  const startLabel = sameMonth
-    ? start.toLocaleDateString("it-IT", { day: "numeric" })
-    : start.toLocaleDateString("it-IT", { day: "numeric", month: "long" });
-  return `${startLabel} – ${fmtDateShort(endIso)}`;
+  const startLabel =
+    start.getMonth() === end.getMonth() ? start.toLocaleDateString("it-IT", { day: "numeric" }) : fmt(startIso);
+  return `${startLabel} – ${fmt(endIso)}`;
 }
 
-// Spiegazione in linguaggio semplice del motivo dietro "pronto"/"in
-// arrivo"/"non ora", mostrata quando l'utente clicca la riga della specie.
-// Cita lo stesso intervallo di date e mm evidenziati nel grafico sopra
-// (stessa somma, nessun indice "smussato" diverso da quello disegnato).
-function speciesDetailText(r) {
-  const profile = SPECIES_RAIN_PROFILE[r.sp];
-  const growthNote = `Dopo una pioggia così, questa specie compare di solito dopo ${profile.incubationMin}-${profile.incubationMax} giorni: il momento migliore è intorno al giorno ${profile.incubationPeak}.`;
+// La pioggia che la spiegazione racconta e che il grafico evidenzia. Deciso
+// qui una volta sola: quando i candidati sono due (un accumulo debole già
+// "incubato" e uno forte ma troppo recente) testo e barre devono per forza
+// scegliere lo stesso, altrimenti si torna al disallineamento di prima.
+// Vince il recente quando l'altro non ha nemmeno raggiunto la soglia: è
+// l'informazione che serve davvero ("torna fra N giorni").
+function speciesCitedEvent(r) {
+  const incubated = r.daysSince != null;
+  if (r.pending && !(incubated && r.metThreshold)) return { ...r.pending, kind: "pending" };
+  if (incubated) {
+    return {
+      kind: "incubated",
+      mm: r.eventMm,
+      daysSince: r.daysSince,
+      eventDate: r.eventDate,
+      windowStartDate: r.windowStartDate,
+    };
+  }
+  return null;
+}
 
-  if (r.daysSince == null) {
-    return `Non è piovuto abbastanza negli ultimi 15 giorni: servono almeno ${profile.minRainMm}mm in ${profile.windowDays} giorni. ${growthNote}`;
+// Colonna stretta accanto al badge: prima mostrava i giorni passati
+// dall'ultima pioggia utile ("11gg"), un numero senza riferimento che non
+// diceva se convenisse andarci. Ora dice quando, non da quanto.
+function speciesWhenLabel(r) {
+  const ev = speciesCitedEvent(r);
+  if (!ev) return "—";
+  if (ev.kind === "incubated") return r.metThreshold ? "ora" : "—";
+  const inDays = Math.max(1, SPECIES_RAIN_PROFILE[r.sp].incubationMin - ev.daysSince);
+  return `tra ${inDays}gg`;
+}
+
+// Come fmtDateRange ma da infilare in una frase: "dal 21 al 26 agosto"
+// invece di "dal 21 – 26 agosto", che dopo la preposizione si inceppa.
+function fmtDateRangeProse(startIso, endIso) {
+  if (!startIso || startIso === endIso) return `${articleFor("il", endIso)}${fmtDateShort(endIso)}`;
+  const start = new Date(startIso + "T00:00:00");
+  const end = new Date(endIso + "T00:00:00");
+  const startLabel =
+    start.getMonth() === end.getMonth()
+      ? start.getDate() === 1
+        ? "1°"
+        : String(start.getDate())
+      : fmtDateShort(startIso);
+  return `${articleFor("dal", startIso)}${startLabel} ${articleFor("al", endIso)}${fmtDateShort(endIso)}`;
+}
+
+// Spiegazione del "pronto"/"in arrivo"/"non ora" mostrata sotto la riga
+// della specie. È strutturata (un verdetto in cima + poche righe di fatti)
+// invece che un paragrafo unico: in 300px di popup un blocco di prosa che
+// mescola date, mm, "giorni fa" e "giorno 11" costringe a rileggere per
+// capire cosa fare, mentre qui la prima riga risponde subito a "ci vado o
+// no?" e le altre dicono perché.
+//
+// Regole che tengono il testo onesto:
+//  - i mm citati sono la somma delle barre EVIDENZIATE nel grafico sopra,
+//    mai di giorni fuori dal grafico (vedi POPUP_RAIN_DAYS);
+//  - l'attesa di incubazione è espressa in date vere ("dal 30 agosto al 7
+//    settembre"), non come "giorno 9" che non si capiva a partire da quando;
+//  - il bosco compare sempre, perché un "non ora" con la pioggia giusta
+//    dipende da lì e prima sembrava una contraddizione.
+function speciesDetailHtml(r) {
+  const profile = SPECIES_RAIN_PROFILE[r.sp];
+  const cited = speciesCitedEvent(r);
+  const facts = [];
+  let verdict;
+  let cls = "none";
+
+  if (cited && cited.kind === "incubated") {
+    // pioggia utile già "incubata": diciamo quando è la finestra buona
+    const from = addDays(cited.eventDate, profile.incubationMin);
+    const to = addDays(cited.eventDate, profile.incubationMax);
+    const peak = addDays(cited.eventDate, profile.incubationPeak);
+    if (!r.metThreshold) {
+      verdict = "Pioggia scarsa, segnale debole";
+      cls = "soon";
+    } else if (r.daysSince < profile.incubationPeak - 1) {
+      verdict = "Stanno cominciando a spuntare";
+      cls = "soon";
+    } else if (r.daysSince <= profile.incubationPeak + 2) {
+      verdict = "Ci siamo: è il momento giusto";
+      cls = "ready";
+    } else {
+      verdict = "Ultimi giorni utili";
+      cls = "soon";
+    }
+    const shortNote = r.metThreshold ? "" : ` invece dei ${profile.minRainMm} che servono`;
+    facts.push([ICONS.rain, `<b>${cited.mm}mm</b> ${fmtDateRangeProse(cited.windowStartDate, cited.eventDate)}${shortNote} — le barre evidenziate qui sopra`]);
+    facts.push([
+      ICONS.timer,
+      r.metThreshold
+        ? `Finestra buona <b>${fmtDateRangeProse(from, to)}</b>, al meglio verso ${articleFor("il", peak)}${fmtDateShort(peak)}`
+        : `Serve una pioggia da <b>${profile.minRainMm}mm in ${profile.windowDays} giorni</b> per una vera buttata`,
+    ]);
+  } else if (cited) {
+    // è piovuto eccome, ma è ancora presto: dire "non è piovuto" qui era
+    // il caso in cui il testo contraddiceva più vistosamente il grafico
+    const from = addDays(cited.eventDate, profile.incubationMin);
+    const to = addDays(cited.eventDate, profile.incubationMax);
+    verdict = `Troppo presto: torna ${articleFor("dal", from)}${fmtDateShort(from)}`;
+    cls = "soon";
+    facts.push([ICONS.rain, `<b>${cited.mm}mm</b> ${fmtDateRangeProse(cited.windowStartDate, cited.eventDate)}: la pioggia è arrivata`]);
+    facts.push([ICONS.timer, `Ma servono ${profile.incubationMin}-${profile.incubationMax} giorni perché escano: attesi <b>${fmtDateRangeProse(from, to)}</b>`]);
+  } else {
+    verdict = "Non è piovuto abbastanza";
+    facts.push([ICONS.rain, `Mai <b>${profile.minRainMm}mm</b> in ${profile.windowDays} giorni nel periodo del grafico`]);
+    facts.push([ICONS.timer, `Quando piove abbastanza, i funghi escono ${profile.incubationMin}-${profile.incubationMax} giorni dopo`]);
   }
 
-  const rangeLabel = fmtDateRange(r.windowStartDate, r.eventDate);
-  const rainWhen = r.daysSince === 0 ? "è di oggi" : `risale a ${r.daysSince} giorni fa`;
-  const weakNote = r.metThreshold ? "" : " È sotto la soglia minima: il segnale è debole.";
+  // Il bosco è l'altra metà del giudizio: senza questa riga un "non ora" su
+  // una zona ben piovuta sembrava un errore del sito. Il verdetto lo scavalca
+  // solo quando il bosco è davvero il fattore che blocca tutto — mai quando
+  // il dato manca, che è ignoranza nostra e non un'informazione sul posto.
+  if (r.vegClass == null) {
+    facts.push([ICONS.forest, "Tipo di bosco non rilevato in questo punto"]);
+  } else if (r.vegClass === "none") {
+    verdict = "Qui non c'è bosco";
+    cls = "none";
+    facts.push([ICONS.forest, "Senza alberi simbionti non nascono, per quanto piova"]);
+  } else if (r.tree < 0.3) {
+    verdict = "Non è il suo bosco";
+    cls = "none";
+    facts.push([ICONS.forest, "Qui è raro anche col tempo perfetto: cerca il bosco giusto per questa specie"]);
+  } else if (r.tree < 0.6) {
+    facts.push([ICONS.forest, "Bosco solo in parte adatto a questa specie"]);
+  } else {
+    facts.push([ICONS.forest, "Bosco adatto a questa specie"]);
+  }
 
-  return `Tra il ${rangeLabel} sono caduti ${r.eventMm}mm (vedi il grafico sopra). L'ultima di queste piogge ${rainWhen}.${weakNote} ${growthNote}`;
+  const rows = facts.map(([icon, text]) => `<li>${icon}<span>${text}</span></li>`).join("");
+  return `
+    <p class="wx-detail-verdict wx-detail-${cls}">${verdict}</p>
+    <ul class="wx-detail-facts">${rows}</ul>`;
 }
 
 const MODE_LABELS = {
@@ -1359,16 +1527,21 @@ function popupError(lat, lon) {
     </div>`;
 }
 
-// Mini grafico a colonne (SVG) con la pioggia giornaliera degli ultimi 15
-// giorni. Barre con cima arrotondata su una singola serie (nessuna legenda
-// necessaria: il titolo dice già cosa mostra); ogni barra ha un'area di
-// tocco a tutta altezza per un hover/tap affidabile anche sui giorni a 0mm,
-// ed etichette solo alle due estremità dell'asse per restare leggibile in
-// poco spazio.
+// Mini grafico a colonne (SVG) con la pioggia giornaliera. Barre con cima
+// arrotondata su una singola serie (nessuna legenda necessaria: il titolo
+// dice già cosa mostra); ogni barra ha un'area di tocco a tutta altezza per
+// un hover/tap affidabile anche sui giorni a 0mm, ed etichette solo alle due
+// estremità dell'asse per restare leggibile in poco spazio.
+//
+// Disegna TUTTI i giorni che riceve, senza tagliarne nessuno: prima ne
+// mostrava 15 mentre l'analisi delle specie sommava sui 17 scaricati, e la
+// finestra citata nella spiegazione poteva pescare mm caduti in giorni fuori
+// dal grafico (nel dataset attuale succedeva in 1 spiegazione su 5, fino a
+// "52mm" a fronte di 7.5mm di barre visibili). Chi taglia è popupContent,
+// una volta sola, per entrambi.
 function buildRainChartHtml(dates, precip, highlight = null) {
-  const n = 15;
-  const d = dates.slice(-n);
-  const p = precip.slice(-n).map((v) => v || 0);
+  const d = dates;
+  const p = precip.map((v) => v || 0);
   if (!d.length) return "";
   const inHighlight = (dateStr) => !!highlight && dateStr >= highlight.start && dateStr <= highlight.end;
 
@@ -1411,13 +1584,13 @@ function buildRainChartHtml(dates, precip, highlight = null) {
   const firstLabel = fmtDateShort(d[0]);
   const lastLabel = "oggi";
   const defaultCaption = highlight
-    ? `${fmtDateRange(highlight.start, highlight.end)}: ${highlight.mm}mm`
+    ? `${fmtDateRangeCompact(highlight.start, highlight.end)}: ${highlight.mm}mm`
     : `Totale: ${Math.round(total)}mm`;
 
   return `
     <div class="wx-rain-section">
       <div class="wx-rain-header">
-        <span class="wx-rain-title">Pioggia ultimi 15gg</span>
+        <span class="wx-rain-title">Pioggia ultimi ${d.length}gg</span>
         <span class="wx-rain-caption" data-default="${defaultCaption}">${defaultCaption}</span>
       </div>
       <svg class="wx-rain-chart" viewBox="0 0 ${width} 74" preserveAspectRatio="none">
@@ -1431,8 +1604,12 @@ function buildRainChartHtml(dates, precip, highlight = null) {
 
 function popupContent(lat, lon, data, openIdx = null) {
   const daily = data.daily || {};
-  const dates = daily.time || [];
-  const precip = daily.precipitation_sum || [];
+  // Unico punto in cui si decide quanti giorni di storico entrano nel
+  // popup: grafico e analisi delle specie leggono lo STESSO array, quindi i
+  // mm citati in una spiegazione sono per costruzione la somma di barre
+  // visibili (vedi buildRainChartHtml).
+  const dates = (daily.time || []).slice(-POPUP_RAIN_DAYS);
+  const precip = (daily.precipitation_sum || []).slice(-POPUP_RAIN_DAYS);
 
   let daysSinceRain = null;
   const today = dates.length ? new Date(dates[dates.length - 1] + "T00:00:00") : new Date();
@@ -1442,7 +1619,8 @@ function popupContent(lat, lon, data, openIdx = null) {
       break;
     }
   }
-  const rainShort = daysSinceRain == null ? "nessuna (16gg)" : daysSinceRain === 0 ? "oggi" : `${daysSinceRain}gg fa`;
+  const rainShort =
+    daysSinceRain == null ? `nessuna (${dates.length}gg)` : daysSinceRain === 0 ? "oggi" : `${daysSinceRain}gg fa`;
 
   const hourly = data.hourly || {};
   const humiditySeries = (hourly.relative_humidity_2m || []).filter((v) => v != null);
@@ -1459,11 +1637,14 @@ function popupContent(lat, lon, data, openIdx = null) {
   const veg = vegetationInfo(vegClass, elevation);
   const species = speciesReadinessList(dates, precip, vegClass, elevation);
 
+  // le barre evidenziate sono esattamente i giorni citati nella
+  // spiegazione aperta — anche quando è una pioggia recente non ancora
+  // "incubata" (r.pending), che prima non veniva né citata né evidenziata
   const openSpecies = openIdx != null ? species[openIdx] : null;
-  const highlight =
-    openSpecies && openSpecies.eventDate
-      ? { start: openSpecies.windowStartDate, end: openSpecies.eventDate, mm: openSpecies.eventMm }
-      : null;
+  const openEvent = openSpecies ? speciesCitedEvent(openSpecies) : null;
+  const highlight = openEvent
+    ? { start: openEvent.windowStartDate, end: openEvent.eventDate, mm: openEvent.mm }
+    : null;
 
   const tile = (icon, label, value) => `
     <div class="wx-tile">
@@ -1476,9 +1657,9 @@ function popupContent(lat, lon, data, openIdx = null) {
 
   const speciesRow = (r, idx) => {
     const badge = speciesStatusBadge(r);
-    const days = r.daysSince != null ? `${r.daysSince}gg` : "—";
+    const days = speciesWhenLabel(r);
     const isOpen = idx === openIdx;
-    const detailHtml = isOpen ? `<li class="wx-species-detail">${speciesDetailText(r)}</li>` : "";
+    const detailHtml = isOpen ? `<li class="wx-species-detail">${speciesDetailHtml(r)}</li>` : "";
     return `
       <li class="wx-species-row${isOpen ? " wx-species-row-open" : ""}" data-idx="${idx}" onclick="toggleSpeciesDetail(${idx})">
         <span class="wx-species-dot" style="background:${r.color}"></span>
