@@ -423,7 +423,7 @@ function speciesDetailHtml(r) {
   if (r.ph != null) {
     facts.push([
       ICONS.ph,
-      r.phFactor >= 0.7
+      r.phFactor >= 0.85
         ? `Suolo ${phLabel(r.ph).split(" · ")[1]} (pH ${r.ph.toFixed(1)}), come piace a questa specie`
         : `Suolo ${phLabel(r.ph).split(" · ")[1]} (pH ${r.ph.toFixed(1)}): questa specie preferisce intorno a pH ${profile.phOptimum.toFixed(1)}`,
     ]);
@@ -436,10 +436,11 @@ function speciesDetailHtml(r) {
      il pH non è ideale non serve a niente se sotto i piedi non c'è bosco.
      Nessuno di questi scatta su un dato mancante — un fetch fallito non è
      un'informazione sfavorevole sul posto. */
-  if (r.ph != null && r.phFactor < 0.45) {
-    verdict = "Suolo poco adatto a questa specie";
-    cls = "none";
-  }
+  // Il pH NON compare fra i controlli che cambiano il verdetto, pur pesando
+  // sul punteggio: è il fattore su cui abbiamo meno certezza (convenzione di
+  // misura diversa da quella della letteratura, media su 250m, mai validato
+  // dal backtest) e mettergli in bocca la frase di apertura darebbe a un
+  // nostro dubbio l'aria di una conclusione. Resta come riga informativa.
   if (citedTempC != null && citedTempFactor < 0.3) {
     verdict = citedTempC > profile.tempOptimumC ? "Troppo caldo per questa specie" : "Troppo freddo per questa specie";
     cls = "none";

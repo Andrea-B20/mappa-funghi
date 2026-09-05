@@ -99,12 +99,22 @@ function speciesAffinityAt(species, vegClass, elevation) {
    e arriva al neutro; ovolo e porcino dei pini sono i più legati ai suoli
    acidi/silicei ed è su di loro che il dato pH discrimina davvero (in Italia
    separa l'Appennino settentrionale arenaceo da quello centrale calcareo).
-   Il pH modula, non veto: vedi il pavimento in phFactor(). */
+
+   ATTENZIONE ALLA CONVENZIONE DI MISURA. SoilGrids fornisce pH in ACQUA,
+   che legge tipicamente 0.5-1.0 unità PIÙ ALTO del pH in KCl/CaCl2 con cui
+   la letteratura micologica spesso esprime le preferenze delle specie.
+   Prendere un ottimo espresso in KCl e confrontarlo con una misura in acqua
+   penalizzerebbe sistematicamente ogni suolo. Non sapendo per ciascun
+   riferimento in quale convenzione fosse, le tolleranze qui sono larghe e
+   il pavimento di phFactor() è alto: il pH sposta il giudizio, non lo
+   decide. È anche l'unico fattore che il backtest non ha ancora potuto
+   misurare (la cache era quasi vuota): quando la copertura sarà completa
+   andrà rimisurato e, se lo scarto resta nullo, stretto o tolto. */
 const SPECIES_RAIN_PROFILE = {
-  porcino_comune: { minRainMm: 20, optimalRainMm: 34, incubationMin: 6, incubationPeak: 9, incubationMax: 14, windowDays: 6, tempOptimumC: 13.2, tempToleranceC: 7, soilTempMinC: 8, phOptimum: 5.6, phTolerance: 1.5 },
-  porcino_pini: { minRainMm: 18, optimalRainMm: 30, incubationMin: 6, incubationPeak: 8, incubationMax: 13, windowDays: 5, tempOptimumC: 12, tempToleranceC: 6.5, soilTempMinC: 7, phOptimum: 4.9, phTolerance: 1.0 },
-  ovolo: { minRainMm: 20, optimalRainMm: 34, incubationMin: 8, incubationPeak: 11, incubationMax: 16, windowDays: 8, tempOptimumC: 19, tempToleranceC: 6, soilTempMinC: 13, phOptimum: 5.5, phTolerance: 1.1 },
-  gallinaccio: { minRainMm: 12, optimalRainMm: 22, incubationMin: 4, incubationPeak: 6, incubationMax: 12, windowDays: 4, tempOptimumC: 15.5, tempToleranceC: 7, soilTempMinC: 12.5, phOptimum: 5.0, phTolerance: 1.3 },
+  porcino_comune: { minRainMm: 20, optimalRainMm: 34, incubationMin: 6, incubationPeak: 9, incubationMax: 14, windowDays: 6, tempOptimumC: 13.2, tempToleranceC: 7, soilTempMinC: 8, phOptimum: 5.9, phTolerance: 2.1 },
+  porcino_pini: { minRainMm: 18, optimalRainMm: 30, incubationMin: 6, incubationPeak: 8, incubationMax: 13, windowDays: 5, tempOptimumC: 12, tempToleranceC: 6.5, soilTempMinC: 7, phOptimum: 5.3, phTolerance: 1.5 },
+  ovolo: { minRainMm: 20, optimalRainMm: 34, incubationMin: 8, incubationPeak: 11, incubationMax: 16, windowDays: 8, tempOptimumC: 19, tempToleranceC: 6, soilTempMinC: 13, phOptimum: 5.9, phTolerance: 1.6 },
+  gallinaccio: { minRainMm: 12, optimalRainMm: 22, incubationMin: 4, incubationPeak: 6, incubationMax: 12, windowDays: 4, tempOptimumC: 15.5, tempToleranceC: 7, soilTempMinC: 12.5, phOptimum: 5.4, phTolerance: 1.8 },
 };
 
 // L'evapotraspirazione di riferimento ET0 è calcolata su prato irrigato in
@@ -165,8 +175,12 @@ function soilTempFactor(species, soilTempC) {
   return Math.max(0.1, 1 - (min - soilTempC) / 6);
 }
 
-// Il pH modula, non decide: pavimento a 0.3 perché è una proprietà media di
-// una cella da 250m, e un versante può ospitare sacche diverse.
+// Il pH modula, non decide: pavimento ALTO perché è la proprietà su cui
+// abbiamo meno certezza — è una media di una cella da 250m (un versante può
+// ospitare sacche diverse), la convenzione di misura non coincide con
+// quella della letteratura (vedi sopra) e il backtest non ha ancora potuto
+// misurarla. Con un pavimento basso un dubbio nostro diventava una
+// stroncatura per l'utente.
 //
 // Non ancora validato: la cache di scripts/fetch_soil_ph.py si riempie a
 // scaglioni e al momento dell'ultimo backtest era quasi vuota, quindi il
@@ -176,7 +190,7 @@ function phFactor(species, ph) {
   if (ph == null) return 1;
   const p = SPECIES_RAIN_PROFILE[species];
   const z = (ph - p.phOptimum) / p.phTolerance;
-  return Math.max(0.3, Math.exp(-0.5 * z * z));
+  return Math.max(0.5, Math.exp(-0.5 * z * z));
 }
 
 // Quanta parte della pioggia di quell'evento è ancora nel terreno oggi,
