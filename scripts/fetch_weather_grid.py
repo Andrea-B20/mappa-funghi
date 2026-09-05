@@ -1,6 +1,7 @@
 """
-Scarica condizioni meteo recenti (pioggia, umidità aria, umidità del suolo),
-quota e copertura forestale per una griglia di punti sull'Italia, e calcola:
+Scarica condizioni meteo recenti (pioggia, temperatura, evapotraspirazione,
+umidità aria, umidità e temperatura del suolo), quota e copertura forestale
+per una griglia di punti sull'Italia, e calcola:
 
   - weather_score: quanto le condizioni meteo attuali favoriscono la crescita
     (pioggia recente, umidità aria/suolo)
@@ -42,6 +43,26 @@ COASTAL_BUFFER_DEG = 0.03
 
 PAST_DAYS = 16
 BATCH_SIZE = 25
+
+# Umidità del suolo: lo strato 3-9cm è dove sta il feltro miceliale dei
+# funghi ectomicorrizici, insieme alle radici fini dell'albero simbionte.
+# Prima si usava 0-1cm, cioè il primo centimetro di lettiera: si asciuga in
+# poche ore, quindi raccontava il tempo di ieri pomeriggio e non lo stato
+# del terreno. Misurato su 28 punti italiani: 0-1cm sta sistematicamente il
+# 70-80% sotto lo strato del micelio (0.107 contro 0.185 in Appennino).
+# 9-27cm è la riserva profonda, che tiene l'acqua molto più a lungo: entra
+# nel punteggio con peso minore perché è il serbatoio, non la zona attiva.
+SOIL_MAT_VAR = "soil_moisture_3_to_9cm"
+SOIL_RESERVE_VAR = "soil_moisture_9_to_27cm"
+
+# Estremi fisici del suolo, non numeri arbitrari: sotto il punto di
+# appassimento l'acqua è trattenuta troppo forte per essere disponibile,
+# sopra la capacità di campo il resto drena via. Verificato che i valori
+# reali italiani (min 0.09, mediana 0.17, max 0.28 su 28 punti a settembre)
+# cadono dentro questa scala invece di schiacciarsi nel quarto basso come
+# succedeva con la vecchia normalizzazione 0.05-0.40 tarata su 0-1cm.
+SOIL_WILTING_POINT = 0.10
+SOIL_FIELD_CAPACITY = 0.32
 
 BOUNDARY_PATH = Path(__file__).resolve().parent.parent / "data" / "italy_boundary.geojson"
 OUT_PATH = Path(__file__).resolve().parent.parent / "web" / "data" / "weather_grid.geojson"
@@ -95,8 +116,8 @@ def fetch_weather_batch(points):
     params = {
         "latitude": lats,
         "longitude": lons,
-        "daily": "precipitation_sum",
-        "hourly": "relative_humidity_2m,soil_moisture_0_to_1cm",
+        "daily": "precipitation_sum,temperature_2m_mean,et0_fao_evapotranspiration",
+        "hourly": f"relative_humidity_2m,{SOIL_MAT_VAR},{SOIL_RESERVE_VAR},soil_temperature_6cm",
         "past_days": PAST_DAYS,
         "forecast_days": 1,
         "timezone": "auto",
@@ -211,10 +232,19 @@ def elevation_suitability(elevation_m):
     return 0.15
 
 
+def soil_water_index(soil_moisture):
+    """Da m3/m3 a 0-1 fra punto di appassimento e capacita di campo."""
+    if soil_moisture is None:
+        return None
+    return clamp01((soil_moisture - SOIL_WILTING_POINT) / (SOIL_FIELD_CAPACITY - SOIL_WILTING_POINT))
+
+
 def compute_weather(lat, lon, payload):
     daily = payload.get("daily", {})
     dates = daily.get("time", [])
     precip = daily.get("precipitation_sum", [])
+    temp_mean = daily.get("temperature_2m_mean", [])
+    et0 = daily.get("et0_fao_evapotranspiration", [])
 
     last_rain_date = None
     days_since_rain = None
@@ -226,16 +256,41 @@ def compute_weather(lat, lon, payload):
             break
 
     rain_7d_mm = sum(mm for mm in precip[-7:] if mm is not None)
+    # bilancio idrico: la pioggia che resta nel terreno e quella caduta meno
+    # quella che l'atmosfera ha gia ripreso. 30mm seguiti da tre giorni di
+    # scirocco non sono 30mm seguiti da tre giorni coperti — con ET0 mediana
+    # italiana di 4.6 mm/giorno, una settimana di sole si mangia 32mm
+    et0_7d_mm = sum(v for v in et0[-7:] if v is not None)
 
     hourly = payload.get("hourly", {})
+
+    def last_valid(key):
+        series = [v for v in hourly.get(key, []) if v is not None]
+        return series[-1] if series else None
+
     humidity_series = [h for h in hourly.get("relative_humidity_2m", []) if h is not None]
-    soil_series = [s for s in hourly.get("soil_moisture_0_to_1cm", []) if s is not None]
     humidity_pct = humidity_series[-1] if humidity_series else None
-    soil_moisture = soil_series[-1] if soil_series else None
+    # la crescita dei carpofori si ferma quando l'umidita relativa MINIMA
+    # scende sotto il 40% (letteratura su Boletus edulis): e il minimo a
+    # contare, non il valore del momento in cui abbiamo scaricato i dati
+    humidity_min_pct = min(humidity_series[-72:]) if humidity_series else None
+
+    soil_moisture = last_valid(SOIL_MAT_VAR)
+    soil_moisture_deep = last_valid(SOIL_RESERVE_VAR)
+    soil_temp_c = last_valid("soil_temperature_6cm")
+
+    # zona attiva (feltro miceliale) pesata piu della riserva profonda
+    mat_w = soil_water_index(soil_moisture)
+    reserve_w = soil_water_index(soil_moisture_deep)
+    if mat_w is None:
+        soil_w = reserve_w if reserve_w is not None else 0.0
+    elif reserve_w is None:
+        soil_w = mat_w
+    else:
+        soil_w = 0.65 * mat_w + 0.35 * reserve_w
 
     recency = recency_weight(days_since_rain)
     amount_w = clamp01(rain_7d_mm / 30.0)
-    soil_w = clamp01((soil_moisture - 0.05) / (0.40 - 0.05)) if soil_moisture is not None else 0.0
     humidity_w = clamp01(((humidity_pct or 0) - 40) / (95 - 40))
 
     weather_score = clamp01(0.40 * recency + 0.25 * amount_w + 0.20 * soil_w + 0.15 * humidity_w)
@@ -244,17 +299,27 @@ def compute_weather(lat, lon, payload):
         "last_rain_date": last_rain_date,
         "days_since_rain": days_since_rain,
         "rain_7d_mm": round(rain_7d_mm, 1),
+        "et0_7d_mm": round(et0_7d_mm, 1),
         "humidity_pct": round(humidity_pct, 0) if humidity_pct is not None else None,
+        "humidity_min_pct": round(humidity_min_pct, 0) if humidity_min_pct is not None else None,
+        # "soil_moisture" resta la chiave principale ma ora e lo strato del
+        # micelio (3-9cm), non piu il primo centimetro di lettiera
         "soil_moisture": round(soil_moisture, 3) if soil_moisture is not None else None,
+        "soil_moisture_deep": round(soil_moisture_deep, 3) if soil_moisture_deep is not None else None,
+        "soil_temp_c": round(soil_temp_c, 1) if soil_temp_c is not None else None,
         "weather_score": round(weather_score, 3),
-        # serie giornaliera grezza: il frontend la usa per calcolare la
+        # serie giornaliere grezze: il frontend le usa per calcolare la
         # "finestra di incubazione" specie per specie (ogni fungo ha una
-        # soglia di pioggia e un ritardo di fruttificazione diversi — vedi
-        # SPECIES_RAIN_PROFILE in web/app.js)
+        # soglia di pioggia, una temperatura ottimale e un ritardo di
+        # fruttificazione diversi — vedi SPECIES_RAIN_PROFILE in web/app.js).
+        # Servono giorno per giorno, non come medie: la temperatura che conta
+        # e quella DEI GIORNI di incubazione di quella specie, non quella di
+        # oggi ne la media dei 17 giorni
         "daily_dates": dates,
         "daily_precip_mm": [round(mm, 1) if mm is not None else 0.0 for mm in precip],
+        "daily_temp_mean_c": [round(t, 1) if t is not None else None for t in temp_mean],
+        "daily_et0_mm": [round(v, 1) if v is not None else 0.0 for v in et0],
     }
-
 
 def main():
     print("Carico il confine dell'Italia...")

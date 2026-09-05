@@ -948,7 +948,9 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
-/* compact 2x2 conditions grid */
+/* griglia condizioni: 3 righe da 2 dopo l'aggiunta di temperatura del
+   suolo e pH. Restano due colonne perché a 300px tre tessere per riga
+   costringerebbero i valori ("6.1 · subacido") ad andare a capo. */
 .wx-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -973,6 +975,9 @@ main {
   letter-spacing: 0.02em;
 }
 .wx-tile-value { font-size: 13px; font-weight: 600; color: var(--text); margin: 1px 0 0; }
+/* "6.1 · subacido" non deve spingere la tessera oltre la sua colonna */
+.wx-tile > div { min-width: 0; }
+.wx-tile-value { overflow-wrap: anywhere; }
 
 .wx-forest-line {
   display: flex;

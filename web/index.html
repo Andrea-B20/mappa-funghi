@@ -192,6 +192,11 @@
 </div>
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+<!-- Il modello (profili delle specie, fattori meteo/suolo/stagione) sta in
+     un file a sé perché scripts/backtest_model.py lo esegue con Node per
+     validarlo sui ritrovamenti reali. Script classico, quindi va prima di
+     app.js: le sue funzioni diventano globali e app.js le usa direttamente. -->
+<script src="model.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

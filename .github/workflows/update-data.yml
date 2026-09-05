@@ -40,13 +40,29 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
       - run: python scripts/fetch_weather_grid.py
+      # pH del suolo: dato statico, quindi lo script è un no-op da pochi
+      # secondi quando la cache è completa. Gira qui e non in un job a parte
+      # perché deve vedere weather_grid.geojson appena riscritto: se il
+      # meteo introduce celle nuove (confine ricalcolato, quota corretta)
+      # il loro pH viene richiesto nella stessa esecuzione. Finché la cache
+      # si sta riempiendo aggiunge al massimo ~25 minuti, e se SoilGrids è
+      # giù lo script esce senza rompere l'aggiornamento meteo
+      - run: python scripts/fetch_soil_ph.py
+        continue-on-error: true
       - name: Commit se i dati sono cambiati
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/data/weather_grid.geojson
-          git diff --cached --quiet || git commit -m "Aggiorna dati meteo (automatico)"
-          git push
+          git add web/data/weather_grid.geojson web/data/soil_ph.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Aggiorna dati meteo e suolo (automatico)"
+          # il job storico può aver spinto nel frattempo: senza rebase il
+          # push fallirebbe e l'aggiornamento del giorno andrebbe perso
+          for i in 1 2 3; do
+            git pull --rebase --autostash && git push && exit 0
+            sleep 5
+          done
+          exit 1
 
   # notifiche pioggia sulle zone disegnate dagli utenti (vedi web/app.js):
   # job separato da update-weather perché non dipende affatto dalla
@@ -90,10 +106,18 @@ jobs:
       # file appena scritto sopra, va rilanciato ogni volta che i
       # ritrovamenti cambiano così le celle nuove hanno subito il loro dato
       - run: python scripts/fetch_vegetation_fine.py
+      # nuovi ritrovamenti = celle fini nuove, che hanno bisogno del loro pH
+      - run: python scripts/fetch_soil_ph.py
+        continue-on-error: true
       - name: Commit se i dati sono cambiati
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/data/occurrences.geojson web/data/vegetation_fine.geojson
-          git diff --cached --quiet || git commit -m "Aggiorna dati storici GBIF/iNaturalist e vegetazione (automatico)"
-          git push
+          git add web/data/occurrences.geojson web/data/vegetation_fine.geojson web/data/soil_ph.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Aggiorna dati storici GBIF/iNaturalist, vegetazione e suolo (automatico)"
+          for i in 1 2 3; do
+            git pull --rebase --autostash && git push && exit 0
+            sleep 5
+          done
+          exit 1

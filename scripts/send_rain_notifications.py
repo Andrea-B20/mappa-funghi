@@ -29,10 +29,29 @@ import gzip
 import io
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import requests
+
+ROOT = Path(__file__).resolve().parent.parent
+SCORER = ROOT / "scripts" / "score_cases.js"
+OCC_PATH = ROOT / "web" / "data" / "occurrences.geojson"
+
+# gli stessi giorni di storico che usa il popup (POPUP_RAIN_DAYS in
+# web/model.js): la notifica deve giudicare sugli stessi dati del sito,
+# altrimenti annuncia una cosa e chi apre la mappa ne legge un'altra
+HISTORY_DAYS = 17
+
+SPECIES_LABELS = {
+    "porcino_comune": "porcini",
+    "porcino_pini": "porcini dei pini",
+    "ovolo": "ovoli",
+    "gallinaccio": "gallinacci",
+}
 
 ONESIGNAL_APP_ID = os.environ.get("ONESIGNAL_APP_ID")
 ONESIGNAL_REST_API_KEY = os.environ.get("ONESIGNAL_REST_API_KEY")
@@ -105,15 +124,21 @@ def fetch_subscribers():
 
 
 def fetch_conditions(lat, lon):
-    """Pioggia e temperatura del giorno più recente già concluso, nel punto
-    esatto della zona (stessa API usata dal popup del sito, vedi
-    onMapClick in web/app.js — non la griglia grossolana in background)."""
+    """Condizioni nel punto esatto della zona, con le stesse variabili che
+    il popup del sito scarica al click (vedi onMapClick in web/app.js) — non
+    la griglia grossolana in background.
+
+    Oltre a pioggia e temperatura del giorno concluso, restituisce l'intero
+    "env" che il modello si aspetta: così la notifica può dire QUALI funghi
+    quella pioggia mette in moto e da quando aspettarseli, invece di
+    limitarsi ai millimetri.
+    """
     params = {
         "latitude": round(lat, 4),
         "longitude": round(lon, 4),
-        "daily": "precipitation_sum",
-        "hourly": "temperature_2m",
-        "past_days": 2,
+        "daily": "precipitation_sum,temperature_2m_mean,et0_fao_evapotranspiration",
+        "hourly": "temperature_2m,soil_temperature_6cm",
+        "past_days": HISTORY_DAYS,
         "forecast_days": 1,
         "timezone": "auto",
     }
@@ -128,11 +153,94 @@ def fetch_conditions(lat, lon):
     # l'ultimo indice è "oggi" (dati ancora parziali): il giorno concluso
     # più recente è quello prima
     idx = len(dates) - 2 if len(dates) >= 2 else len(dates) - 1
-    hourly_temp = (data.get("hourly") or {}).get("temperature_2m", [])
+    hourly = data.get("hourly") or {}
+    hourly_temp = [v for v in hourly.get("temperature_2m", []) if v is not None]
+    soil_temp = [v for v in hourly.get("soil_temperature_6cm", []) if v is not None]
+
+    def series(key):
+        return [v if v is not None else 0.0 for v in (daily.get(key) or [])][-HISTORY_DAYS:]
+
     return {
         "mm": precip[idx] if idx < len(precip) else None,
         "temp_c": hourly_temp[-1] if hourly_temp else None,
+        "env": {
+            "dates": dates[-HISTORY_DAYS:],
+            "precip": series("precipitation_sum"),
+            "temp": series("temperature_2m_mean"),
+            "et0": series("et0_fao_evapotranspiration"),
+            "soilTempC": soil_temp[-1] if soil_temp else None,
+            # bosco e pH non li sappiamo per una zona disegnata a mano
+            # libera (copre chilometri di terreno vario): restano neutri,
+            # e la notifica parla solo di quello che sa davvero, cioè meteo
+            # e stagione. Chi apre la mappa vede poi il dettaglio del punto.
+            "vegClass": None,
+            "elevation": None,
+            "ph": None,
+        },
     }
+
+
+def score_species(zones):
+    """Punteggi delle specie per ogni zona, calcolati dal MODELLO DEL SITO
+    (web/model.js via Node), non da una copia in Python: una riscrittura
+    divergerebbe al primo ritocco e la notifica finirebbe per dire una cosa
+    diversa da quella che l'utente legge aprendo la mappa.
+
+    Se Node o il file dei ritrovamenti mancano, ritorna {} e le notifiche
+    tornano a essere quelle di prima (solo millimetri): meglio una notifica
+    più povera che nessuna notifica.
+    """
+    cases = []
+    for i, zone in enumerate(zones):
+        for species in SPECIES_LABELS:
+            cases.append(
+                {
+                    "id": f"{i}:{species}",
+                    "species": species,
+                    "label": "zona",
+                    "date": zone["conditions"]["env"]["dates"][-1],
+                    "env": zone["conditions"]["env"],
+                }
+            )
+    if not cases:
+        return {}
+    try:
+        train = json.loads(OCC_PATH.read_text(encoding="utf-8"))["features"]
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"ritrovamenti non leggibili ({exc}): notifiche senza specie", file=sys.stderr)
+        return {}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        in_path = Path(tmp) / "cases.json"
+        out_path = Path(tmp) / "scores.json"
+        in_path.write_text(json.dumps({"trainOccurrences": train, "cases": cases}), encoding="utf-8")
+        try:
+            subprocess.run(["node", str(SCORER), str(in_path), str(out_path)], check=True, capture_output=True)
+            rows = json.loads(out_path.read_text(encoding="utf-8"))
+        except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+            print(f"modello non eseguibile ({exc}): notifiche senza specie", file=sys.stderr)
+            return {}
+
+    best = {}
+    for row in rows:
+        zone_idx = int(row["id"].split(":")[0])
+        current = best.get(zone_idx)
+        if current is None or row["scoreNew"] > current["scoreNew"]:
+            best[zone_idx] = row
+    return best
+
+
+def species_note(best_row):
+    """"I porcini sono attesi fra 6-14 giorni" — la parte che rende la
+    notifica azionabile invece che solo meteorologica. Compare solo se il
+    modello dà a quella specie un punteggio non trascurabile: annunciare
+    funghi che non verranno è peggio che tacere."""
+    if not best_row or best_row.get("scoreNew", 0) < 0.12:
+        return ""
+    label = SPECIES_LABELS.get(best_row["species"])
+    if not label:
+        return ""
+    return f" Occhio ai {label}."
 
 
 def send_push(subscription_ids, rained_zones):
@@ -141,11 +249,12 @@ def send_push(subscription_ids, rained_zones):
         z = rained_zones[0]
         temp_txt = f", {round(z['temp_c'])}°C" if z["temp_c"] is not None else ""
         heading = "Ha piovuto nella tua zona"
-        content = f"{z['mm']:.0f}mm caduti ieri{temp_txt}. Controlla le condizioni sulla mappa."
+        content = f"{z['mm']:.0f}mm caduti ieri{temp_txt}.{species_note(z.get('best'))} Controlla le condizioni sulla mappa."
     else:
         max_mm = max(z["mm"] for z in rained_zones)
+        best = max((z.get("best") for z in rained_zones if z.get("best")), key=lambda r: r["scoreNew"], default=None)
         heading = f"Ha piovuto in {len(rained_zones)} delle tue zone"
-        content = f"Fino a {max_mm:.0f}mm caduti ieri. Controlla le condizioni sulla mappa."
+        content = f"Fino a {max_mm:.0f}mm caduti ieri.{species_note(best)} Controlla le condizioni sulla mappa."
     body = {
         "app_id": ONESIGNAL_APP_ID,
         "include_subscription_ids": subscription_ids,
@@ -173,10 +282,16 @@ def main():
                 print(f"errore meteo per {zone['lat']},{zone['lon']}: {exc}", file=sys.stderr)
                 continue
             if conditions and conditions["mm"] and conditions["mm"] >= MIN_MM_TO_NOTIFY:
-                rained.append({**zone, **conditions})
+                rained.append({**zone, **conditions, "conditions": conditions})
             time.sleep(0.1)
         if not rained:
             continue
+
+        # quali funghi mette in moto questa pioggia, secondo lo stesso
+        # modello che colora la mappa
+        best_by_zone = score_species(rained)
+        for idx, zone in enumerate(rained):
+            zone["best"] = best_by_zone.get(idx)
         try:
             send_push(sub["subscription_ids"], rained)
             print(f"notifica inviata: {len(rained)} zone piovose su {len(sub['zones'])}")

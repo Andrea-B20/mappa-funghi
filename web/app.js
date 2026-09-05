@@ -11,45 +11,17 @@ const ICONS = {
   humidity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9c1.8-1.8 3.6-1.8 5.4 0s3.6 1.8 5.4 0 3.6-1.8 5.4 0"/><path d="M3.5 14.2c1.8-1.8 3.6-1.8 5.4 0s3.6 1.8 5.4 0 3.6-1.8 5.4 0"/><path d="M3.5 19.4c1.8-1.8 3.6-1.8 5.4 0s3.6 1.8 5.4 0 3.6-1.8 5.4 0"/></svg>`,
   elevation: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19l5.5-9.5 3.3 4.8 2-2.8L21 19z"/></svg>`,
   forest: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l3 4.7h-2l2.8 4.3h-2.4l3 4.5H7.6l3-4.5H8.2l2.8-4.3h-2z"/><path d="M12 17v4"/></svg>`,
+  thermometer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13.5V5a2 2 0 1 1 4 0v8.5a4 4 0 1 1-4 0z"/><path d="M12 9v6"/></svg>`,
+  ph: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><path d="M4 3h4M16 3h4"/><path d="M6.6 13h10.8"/></svg>`,
+  calendar: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>`,
+  slope: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19h18"/><path d="M4 19L15 6"/><path d="M15 6v6"/></svg>`,
   timer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5v4l2.8 1.8"/><path d="M9.5 2h5"/></svg>`,
 };
 
 // Tipo di copertura del suolo REALE per ogni cella della griglia meteo,
 // da Corine Land Cover (Copernicus/EEA) — vedi scripts/fetch_weather_grid.py.
 // broadleaf/conifer/mixed/shrub/none, non più una stima da quota+latitudine.
-// Affinità di base delle specie per ciascun tipo (il porcino dei pini vive
-// con le conifere, l'ovolo quasi solo con latifoglie calde, ecc.).
-const SPECIES_VEG_AFFINITY = {
-  porcino_comune: { broadleaf: 0.85, conifer: 0.65, mixed: 1.0, shrub: 0.2, none: 0.05 },
-  porcino_pini: { broadleaf: 0.15, conifer: 0.95, mixed: 0.6, shrub: 0.15, none: 0.05 },
-  ovolo: { broadleaf: 1.0, conifer: 0.05, mixed: 0.15, shrub: 0.1, none: 0.05 },
-  gallinaccio: { broadleaf: 0.85, conifer: 0.55, mixed: 0.85, shrub: 0.3, none: 0.05 },
-};
 
-// Corine distingue il tipo di bosco (latifoglie/conifere/misto) ma non la
-// quota a cui si trova: due celle "latifoglie" possono essere un querceto
-// mediterraneo a 200m o una faggeta a 1400m, con specie diverse. Questa è
-// una correzione SECONDARIA (una gaussiana larga sulla quota tipica della
-// specie) che affina l'affinità reale, senza mai ribaltarla: un pavimento
-// di 0.4 evita che la sola quota azzeri un'affinità di vegetazione reale.
-const SPECIES_ELEVATION_PREF = {
-  porcino_comune: { center: 900, spread: 900 },
-  porcino_pini: { center: 1300, spread: 900 },
-  ovolo: { center: 350, spread: 500 },
-  gallinaccio: { center: 700, spread: 800 },
-};
-
-function elevationFactor(species, elevation) {
-  if (elevation == null) return 1;
-  const pref = SPECIES_ELEVATION_PREF[species];
-  const z = (elevation - pref.center) / pref.spread;
-  return Math.max(0.4, Math.exp(-0.5 * z * z));
-}
-
-function speciesAffinityAt(species, vegClass, elevation) {
-  const base = SPECIES_VEG_AFFINITY[species]?.[vegClass ?? "none"] ?? 0.3;
-  return base * elevationFactor(species, elevation);
-}
 
 // Etichetta leggibile per il popup: il tipo (latifoglie/conifere/misto) è
 // il dato Corine reale; la quota affina solo la parola usata (es. faggeta
@@ -83,6 +55,65 @@ function latLonToWebMercator(lat, lon) {
 // dalla cella meteo più vicina (fino a 30-40km di distanza, troppo per
 // dire con affidabilità se lì c'è bosco o no): stessa fonte usata per
 // popolare i dati server-side, ma qui alla precisione del singolo click.
+// pH del suolo nel punto esatto cliccato (SoilGrids 2.0, ISRIC). Sulla
+// mappa il pH viene dalla cache in repo, che è a maglie larghe; qui invece
+// si può chiedere il valore del punto vero, ed è quello che conta a chi sta
+// decidendo dove andare. Il servizio è lento e a tratti irraggiungibile:
+// chi chiama gestisce il fallimento lasciando il pH a null (neutro).
+async function fetchSoilPh(lat, lon) {
+  const url =
+    `https://rest.isric.org/soilgrids/v2.0/properties/query?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}` +
+    `&property=phh2o&depth=5-15cm&depth=15-30cm&value=mean`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const layers = (await resp.json())?.properties?.layers || [];
+  const values = [];
+  for (const layer of layers) {
+    const factor = layer.unit_measure?.d_factor || 10;
+    for (const depth of layer.depths || []) {
+      const raw = depth.values?.mean;
+      if (raw != null) values.push(raw / factor);
+    }
+  }
+  if (!values.length) return null;
+  return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
+}
+
+// Pendenza ed esposizione dal DEM, per differenze finite su quattro quote
+// attorno al punto (~250m per lato). Esiste solo qui e non sulla griglia
+// perché a 0.5° (55km) una "esposizione della cella" non significa nulla:
+// dentro ci stanno versanti opposti. Sul punto cliccato invece è reale.
+const TERRAIN_STEP_M = 250;
+
+async function fetchTerrain(lat, lon) {
+  const dLat = TERRAIN_STEP_M / 111320;
+  const dLon = TERRAIN_STEP_M / (111320 * Math.cos((lat * Math.PI) / 180));
+  const pts = [
+    [lat + dLat, lon],
+    [lat - dLat, lon],
+    [lat, lon + dLon],
+    [lat, lon - dLon],
+  ];
+  const url =
+    "https://api.open-meteo.com/v1/elevation?latitude=" +
+    pts.map((q) => q[0].toFixed(5)).join(",") +
+    "&longitude=" +
+    pts.map((q) => q[1].toFixed(5)).join(",");
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const [north, south, east, west] = (await resp.json()).elevation || [];
+  if ([north, south, east, west].some((v) => v == null)) return null;
+  // gradiente in m/m: positivo verso nord e verso est
+  const dzdy = (north - south) / (2 * TERRAIN_STEP_M);
+  const dzdx = (east - west) / (2 * TERRAIN_STEP_M);
+  const slopeDeg = (Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI;
+  // l'esposizione è la direzione di DISCESA (dove guarda il versante),
+  // cioè l'opposto del gradiente, riportata in gradi da nord in senso orario
+  let aspectDeg = (Math.atan2(-dzdx, -dzdy) * 180) / Math.PI;
+  if (aspectDeg < 0) aspectDeg += 360;
+  return { slopeDeg, aspectDeg };
+}
+
 async function fetchClcVegClass(lat, lon) {
   const { x, y } = latLonToWebMercator(lat, lon);
   const params = new URLSearchParams({
@@ -110,169 +141,63 @@ async function fetchClcVegClass(lat, lon) {
   return CLC_VEG_CLASS[vectorCode || rasterCode] ?? "none";
 }
 
-/* ---------------- Finestra di incubazione pioggia → fruttificazione ----------------
-   Ogni specie ha una soglia di pioggia minima per innescare una "buttata" e un
-   ritardo tipico prima che i corpi fruttiferi emergano (i raccoglitori lo
-   sanno bene: "aspetta una decina di giorni dopo la pioggia"). I valori sono
-   una stima ragionata da conoscenza micologica/pratica di raccolta corrente,
-   non una misura di laboratorio per singola specie:
-   - soglia di pioggia minima nella finestra utile della specie
-   - giorni minimi/di picco/massimi tra pioggia e comparsa dei funghi
-   - lunghezza della finestra: su quanti giorni si somma la pioggia (specie
-     con miceli/riserve più profonde "ricordano" un periodo piovoso più
-     lungo, non solo l'ultimo acquazzone)
 
-   La somma è una somma mobile SEMPLICE sui mm reali del grafico "Pioggia
-   ultimi giorni" — non un indice smussato — apposta perché il numero mostrato
-   nella spiegazione di ogni specie sia lo stesso che si può verificare a
-   occhio sommando le barre del grafico (in precedenza usavamo un indice a
-   decadimento esponenziale: matematicamente più elegante, ma restituiva un
-   valore diverso da quello visibile nel grafico, disallineando i due).
-*/
-const SPECIES_RAIN_PROFILE = {
-  porcino_comune: { minRainMm: 20, optimalRainMm: 34, incubationMin: 6, incubationPeak: 9, incubationMax: 14, windowDays: 6 },
-  porcino_pini: { minRainMm: 18, optimalRainMm: 30, incubationMin: 6, incubationPeak: 8, incubationMax: 13, windowDays: 5 },
-  ovolo: { minRainMm: 20, optimalRainMm: 34, incubationMin: 8, incubationPeak: 11, incubationMax: 16, windowDays: 8 },
-  gallinaccio: { minRainMm: 12, optimalRainMm: 22, incubationMin: 4, incubationPeak: 6, incubationMax: 12, windowDays: 4 },
-};
 
-// Giorni di storico pioggia che il popup usa (grafico + analisi specie).
-// Tenuto uguale alla finestra della griglia meteo (PAST_DAYS=16 + il giorno
-// corrente in scripts/fetch_weather_grid.py): popup e colori della mappa
-// devono giudicare sugli stessi giorni, altrimenti raccontano storie diverse
-// sullo stesso punto.
-const POPUP_RAIN_DAYS = 17;
 
-// Somma mobile sui windowDays precedenti (inclusi): result[i] = somma di
-// dailyPrecip da i-windowDays+1 a i.
-function rollingWindowSums(dailyPrecip, windowDays) {
-  return dailyPrecip.map((_, i) => {
-    const start = Math.max(0, i - windowDays + 1);
-    let sum = 0;
-    for (let j = start; j <= i; j++) sum += dailyPrecip[j] || 0;
-    return sum;
-  });
-}
-
-// Curva a trapezio: 0 prima della soglia minima, sale al picco, poi scende
-// (i funghi marciscono/vengono raccolti) fino a un residuo basso oltre la
-// finestra massima.
-function incubationCurve(daysSince, profile) {
-  const { incubationMin: min, incubationPeak: peak, incubationMax: max } = profile;
-  if (daysSince < min) return 0;
-  if (daysSince <= peak) return (daysSince - min) / (peak - min || 1);
-  if (daysSince <= max) return 1 - 0.8 * ((daysSince - peak) / (max - peak || 1));
-  return 0.08;
-}
-
-// Quanto è "pronta" la fruttificazione di una specie oggi, valutando
-// l'intero storico di pioggia disponibile (16 giorni) tramite l'API sopra,
-// non solo l'ultimo giorno di pioggia. Per ogni giorno della finestra
-// calcoliamo quanto sarebbe "pronta" la specie SE oggi fosse quel tanti-
-// esimo giorno dopo quell'accumulo, e teniamo il giorno con il punteggio
-// migliore — così una pioggia abbondante ma non recentissima non sparisce
-// solo perché non è la più vicina a oggi.
-function speciesRainReadiness(species, dailyDates, dailyPrecip) {
-  const profile = SPECIES_RAIN_PROFILE[species];
-  const empty = {
-    score: 0.05,
-    daysSince: null,
-    eventMm: null,
-    eventDate: null,
-    windowStartDate: null,
-    metThreshold: false,
-    pending: null,
-  };
-  if (!profile || !dailyDates || !dailyDates.length) return empty;
-
-  const sums = rollingWindowSums(dailyPrecip, profile.windowDays);
-  const todayIdx = dailyDates.length - 1;
-
-  let best = { ...empty, score: 0 };
-  for (let i = todayIdx; i >= 0; i--) {
-    const daysSince = todayIdx - i;
-    if (daysSince > profile.incubationMax) break;
-    const curve = incubationCurve(daysSince, profile);
-    if (curve <= 0) continue;
-    const amountFactor = Math.min(1, sums[i] / profile.optimalRainMm);
-    const score = curve * amountFactor;
-    if (score > best.score) {
-      const windowStartIdx = Math.max(0, i - profile.windowDays + 1);
-      best = {
-        score,
-        daysSince,
-        eventMm: Math.round(sums[i]),
-        eventDate: dailyDates[i],
-        windowStartDate: dailyDates[windowStartIdx],
-        metThreshold: sums[i] >= profile.minRainMm,
-      };
-    }
-  }
-  // Pioggia che ha già superato la soglia della specie ma è caduta troppo
-  // di recente perché i funghi siano usciti: il punteggio resta (giustamente)
-  // basso, ma senza registrarla la spiegazione direbbe "non è piovuto
-  // abbastanza" mentre nel grafico si vedono barre alte — la contraddizione
-  // più confondente del popup.
-  let pending = null;
-  for (let i = todayIdx; i >= 0; i--) {
-    const daysSince = todayIdx - i;
-    if (daysSince >= profile.incubationMin) break;
-    if (sums[i] < profile.minRainMm) continue;
-    if (!pending || sums[i] > pending.mm) {
-      pending = {
-        mm: Math.round(sums[i]),
-        daysSince,
-        eventDate: dailyDates[i],
-        windowStartDate: dailyDates[Math.max(0, i - profile.windowDays + 1)],
-      };
-    }
-  }
-
-  // pavimento 0.05: mai un vero zero, ma un evento debole/assente resta
-  // comunque nettamente sotto un evento forte e ben temporizzato
-  return { ...best, pending, score: Math.max(0.05, best.score) };
-}
-
-function conditionsQuality(soilMoisture, humidityPct) {
-  const soilW = soilMoisture != null ? Math.max(0, Math.min(1, (soilMoisture - 0.05) / (0.4 - 0.05))) : 0.4;
-  const humW = Math.max(0, Math.min(1, ((humidityPct || 0) - 40) / (95 - 40)));
-  return Math.max(0, Math.min(1, 0.5 * soilW + 0.5 * humW));
-}
 
 // Combina, per le specie attualmente selezionate, la finestra di
 // incubazione pioggia-specifica con l'idoneità del tipo di bosco: un luogo
 // "pronto" richiede sia la pioggia giusta al momento giusto sia l'albero
 // simbionte giusto.
-function activeSpeciesReadinessAt(dailyDates, dailyPrecip, vegClass, elevation) {
+function activeSpeciesReadinessAt(env) {
   if (activeSpecies.size === 0) return 0.5;
   let best = 0;
-  for (const sp of activeSpecies) {
-    const rain = speciesRainReadiness(sp, dailyDates, dailyPrecip).score;
-    const tree = speciesAffinityAt(sp, vegClass, elevation);
-    best = Math.max(best, rain * tree);
-  }
+  for (const sp of activeSpecies) best = Math.max(best, speciesScore(sp, env));
   return best;
 }
+
+
 
 // Stato combinato (pioggia nella finestra giusta × tipo di bosco adatto)
 // per tutte e 4 le specie tracciate in un punto esatto — la stessa formula
 // usata per colorare la mappa, così il popup e la mappa raccontano sempre
 // la stessa storia. Ordinato dalla più alla meno pronta in questo momento.
-function speciesReadinessList(dailyDates, dailyPrecip, vegClass, elevation) {
+function speciesReadinessList(env) {
   return Object.keys(SPECIES_META)
     .map((sp) => {
-      const rain = speciesRainReadiness(sp, dailyDates, dailyPrecip);
-      const tree = speciesAffinityAt(sp, vegClass, elevation);
-      // "tree"/"vegClass" viaggiano insieme al resto: la spiegazione deve
-      // poter dire che un "non ora" dipende dal bosco e non dalla pioggia
-      return { sp, label: SPECIES_META[sp].label, color: SPECIES_META[sp].color, ...rain, tree, vegClass, score: rain.score * tree };
+      const rain = speciesRainReadiness(sp, env);
+      // ogni fattore viaggia insieme al punteggio: la spiegazione sotto la
+      // riga deve poter dire QUALE dei sei sta bloccando, invece di
+      // limitarsi a un "non ora" senza motivo apparente
+      return {
+        sp,
+        label: SPECIES_META[sp].label,
+        color: SPECIES_META[sp].color,
+        ...rain,
+        tree: speciesAffinityAt(sp, env.vegClass, env.elevation),
+        ph: env.ph,
+        phFactor: phFactor(sp, env.ph),
+        season: seasonFactor(sp),
+        soilTempC: env.soilTempC,
+        soilTempFactor: soilTempFactor(sp, env.soilTempC),
+        vegClass: env.vegClass,
+        score: speciesScore(sp, env, rain),
+      };
     })
     .sort((a, b) => b.score - a.score);
 }
 
+/* Il punteggio è un prodotto di fattori tutti <= 1 (finestra di pioggia,
+   temperatura di incubazione, evaporazione, bosco, quota, pH, stagione,
+   temperatura del suolo), quindi le soglie vanno lette così: "pronto"
+   richiede che NESSUN fattore sia messo male — tipicamente pioggia ~0.6 x
+   bosco ~0.8 x stagione ~0.7 ~= 0.34; "in arrivo" tollera un fattore
+   mediocre. Erano 0.45/0.18 quando i fattori erano solo due: con sei, le
+   stesse soglie lasciavano 2 celle su 188 in verde ai primi di settembre,
+   cioè nascondevano un'informazione vera invece di riassumerla. */
 function speciesStatusBadge(r) {
-  if (r.score >= 0.45) return { word: "pronto", cls: "ready" };
-  if (r.score >= 0.18) return { word: "in arrivo", cls: "soon" };
+  if (r.score >= 0.3) return { word: "pronto", cls: "ready" };
+  if (r.score >= 0.12) return { word: "in arrivo", cls: "soon" };
   return { word: "non ora", cls: "none" };
 }
 
@@ -332,6 +257,9 @@ function speciesCitedEvent(r) {
       daysSince: r.daysSince,
       eventDate: r.eventDate,
       windowStartDate: r.windowStartDate,
+      incubationTempC: r.incubationTempC,
+      tempFactor: r.tempFactor,
+      retention: r.retention,
     };
   }
   return null;
@@ -425,6 +353,55 @@ function speciesDetailHtml(r) {
     facts.push([ICONS.timer, `Quando piove abbastanza, i funghi escono ${profile.incubationMin}-${profile.incubationMax} giorni dopo`]);
   }
 
+  // Evaporazione: risponde al "ma allora perché non ci sono, se è piovuto?".
+  // Solo per una pioggia già incubata — su una appena caduta non ha ancora
+  // senso — e solo quando ha davvero morso, altrimenti è rumore.
+  if (cited && cited.kind === "incubated" && cited.retention != null && cited.retention < 0.7) {
+    facts.push([
+      ICONS.humidity,
+      cited.retention <= 0.2
+        ? "Ma sole e vento l'hanno quasi tutta riasciugata"
+        : `Ma il sole ne ha già ripresa circa <b>${Math.round((1 - cited.retention) * 100)}%</b>`,
+    ]);
+  }
+
+  // Temperatura: è il fattore che la letteratura indica come più vincolante
+  // della pioggia a breve termine, quindi si mostra sempre quando il dato
+  // c'è. Va letta sui giorni dell'evento CITATO: per una pioggia incubata è
+  // la media dell'attesa, per una appena caduta è quella di questi giorni.
+  const citedTempC = cited ? cited.incubationTempC : r.incubationTempC;
+  const citedTempFactor = (cited ? cited.tempFactor : r.tempFactor) ?? 1;
+  if (citedTempC != null) {
+    const judgement =
+      citedTempFactor >= 0.75
+        ? "in pieno nella sua forbice"
+        : citedTempC > profile.tempOptimumC
+          ? `troppo caldo (ideale ~${profile.tempOptimumC}°C)`
+          : `troppo fresco (ideale ~${profile.tempOptimumC}°C)`;
+    const when = cited && cited.kind === "pending" ? "in questi giorni" : "di media durante l'attesa";
+    facts.push([ICONS.thermometer, `<b>${Math.round(citedTempC)}°C</b> ${when}: ${judgement}`]);
+  }
+
+  // Suolo troppo freddo: blocca l'avvio a monte, quindi va detto anche
+  // quando pioggia e bosco sono perfetti
+  if (r.soilTempC != null && r.soilTempFactor < 1) {
+    facts.push([
+      ICONS.thermometer,
+      `Terreno a <b>${Math.round(r.soilTempC)}°C</b>: sotto i ${profile.soilTempMinC}°C che servono per far partire i primordi`,
+    ]);
+  }
+
+  // Stagione, dalle date reali dei ritrovamenti di questa specie
+  if (r.season != null && r.season < 0.6) {
+    const window = seasonWindowLabel(r.sp);
+    facts.push([
+      ICONS.calendar,
+      window
+        ? `Fuori dal suo periodo: di solito si trova ${window}`
+        : "Fuori dal periodo in cui questa specie si trova di solito",
+    ]);
+  }
+
   // Il bosco è l'altra metà del giudizio: senza questa riga un "non ora" su
   // una zona ben piovuta sembrava un errore del sito. Il verdetto lo scavalca
   // solo quando il bosco è davvero il fattore che blocca tutto — mai quando
@@ -432,17 +409,57 @@ function speciesDetailHtml(r) {
   if (r.vegClass == null) {
     facts.push([ICONS.forest, "Tipo di bosco non rilevato in questo punto"]);
   } else if (r.vegClass === "none") {
-    verdict = "Qui non c'è bosco";
-    cls = "none";
     facts.push([ICONS.forest, "Senza alberi simbionti non nascono, per quanto piova"]);
   } else if (r.tree < 0.3) {
-    verdict = "Non è il suo bosco";
-    cls = "none";
     facts.push([ICONS.forest, "Qui è raro anche col tempo perfetto: cerca il bosco giusto per questa specie"]);
   } else if (r.tree < 0.6) {
     facts.push([ICONS.forest, "Bosco solo in parte adatto a questa specie"]);
   } else {
     facts.push([ICONS.forest, "Bosco adatto a questa specie"]);
+  }
+
+  // pH: modula, non decide — per questo la riga informa e solo un valore
+  // davvero fuori campo arriva a cambiare il verdetto
+  if (r.ph != null) {
+    facts.push([
+      ICONS.ph,
+      r.phFactor >= 0.7
+        ? `Suolo ${phLabel(r.ph).split(" · ")[1]} (pH ${r.ph.toFixed(1)}), come piace a questa specie`
+        : `Suolo ${phLabel(r.ph).split(" · ")[1]} (pH ${r.ph.toFixed(1)}): questa specie preferisce intorno a pH ${profile.phOptimum.toFixed(1)}`,
+    ]);
+  }
+
+  /* Quale fattore nomina il verdetto in cima.
+
+     I controlli sono in ordine CRESCENTE di gravità e l'ultimo che scatta
+     vince, perché è quello che chi legge deve sapere per primo: sapere che
+     il pH non è ideale non serve a niente se sotto i piedi non c'è bosco.
+     Nessuno di questi scatta su un dato mancante — un fetch fallito non è
+     un'informazione sfavorevole sul posto. */
+  if (r.ph != null && r.phFactor < 0.45) {
+    verdict = "Suolo poco adatto a questa specie";
+    cls = "none";
+  }
+  if (citedTempC != null && citedTempFactor < 0.3) {
+    verdict = citedTempC > profile.tempOptimumC ? "Troppo caldo per questa specie" : "Troppo freddo per questa specie";
+    cls = "none";
+  }
+  if (r.soilTempC != null && r.soilTempFactor < 0.5) {
+    verdict = "Terreno ancora troppo freddo";
+    cls = "none";
+  }
+  if (r.season != null && r.season < 0.25) {
+    const window = seasonWindowLabel(r.sp);
+    verdict = window ? `Fuori stagione: si trova ${window}` : "Fuori stagione per questa specie";
+    cls = "none";
+  }
+  if (r.tree < 0.3 && r.vegClass != null && r.vegClass !== "none") {
+    verdict = "Non è il suo bosco";
+    cls = "none";
+  }
+  if (r.vegClass === "none") {
+    verdict = "Qui non c'è bosco";
+    cls = "none";
   }
 
   const rows = facts.map(([icon, text]) => `<li>${icon}<span>${text}</span></li>`).join("");
@@ -458,11 +475,11 @@ const MODE_LABELS = {
   },
   meteo: {
     title: "Favorevolezza meteo attuale",
-    desc: "Finestra di incubazione pioggia→fruttificazione delle specie selezionate (soglia di pioggia e giorni di attesa tipici di ciascuna) più tipo di bosco adatto.",
+    desc: "Pioggia nella finestra utile di ogni specie, pesata per la temperatura dei giorni di incubazione e per quanta di quella pioggia l'evaporazione ha già ripreso; poi tipo di bosco, quota, pH del suolo, temperatura del terreno e periodo dell'anno in cui la specie si trova davvero.",
   },
   combinato: {
     title: "Probabilità stimata",
-    desc: "Storico dei ritrovamenti modulato da meteo attuale, quota, tipo di bosco e finestra di incubazione pioggia-specie: rosso = zone note e pronte ora per le specie selezionate.",
+    desc: "Storico dei ritrovamenti modulato da tutto quanto sopra: rosso = zone note e con le condizioni giuste adesso per le specie selezionate.",
   },
 };
 
@@ -1413,22 +1430,60 @@ function zonesForStorico() {
   }));
 }
 
+/* ---------------- pH del suolo (SoilGrids, cache lato repo) ----------------
+   Caricato da web/data/soil_ph.json, che scripts/fetch_soil_ph.py riempie a
+   scaglioni: la copertura può essere parziale, e un punto senza dato deve
+   restare neutro (phFactor ritorna 1 su null) invece di sparire dalla mappa. */
+let phByPoint = new Map();
+let phKeyRoundDeg = 0.01;
+
+function phAt(lat, lon) {
+  if (!phByPoint.size) return null;
+  const r = phKeyRoundDeg;
+  const key = `${(Math.round(lat / r) * r).toFixed(2)},${(Math.round(lon / r) * r).toFixed(2)}`;
+  const v = phByPoint.get(key);
+  return v == null ? null : v;
+}
+
+// Tutto ciò che serve a giudicare un punto, raccolto in un oggetto solo:
+// griglia meteo e popup passano esattamente le stesse cose a
+// speciesScore(), quindi mappa e badge non possono divergere.
+function envFromWeatherCell(f, overrides = {}) {
+  const p = f.properties;
+  // I campi nuovi (temperatura, ET0, temperatura del suolo) possono mancare
+  // se il browser ha in cache una versione precedente del geojson: in quel
+  // caso i fattori corrispondenti valgono 1 e la mappa torna semplicemente
+  // a essere quella di prima, invece di rompersi o di svuotarsi. Verificato
+  // servendo di proposito il file vecchio.
+  return {
+    dates: p.daily_dates,
+    precip: p.daily_precip_mm,
+    temp: p.daily_temp_mean_c,
+    et0: p.daily_et0_mm,
+    soilMoisture: p.soil_moisture,
+    soilMoistureDeep: p.soil_moisture_deep,
+    soilTempC: p.soil_temp_c,
+    humidityPct: p.humidity_pct,
+    humidityMinPct: p.humidity_min_pct,
+    vegClass: p.veg_class,
+    elevation: p.elevation_m,
+    ph: phAt(p.lat, p.lon),
+    ...overrides,
+  };
+}
+
 function zonesForMeteo() {
   const raw = weatherCells.map((f) => {
     const lat = f.geometry.coordinates[1];
     const lon = f.geometry.coordinates[0];
-    const conditions = conditionsQuality(f.properties.soil_moisture, f.properties.humidity_pct);
-    const readiness = activeSpeciesReadinessAt(
-      f.properties.daily_dates,
-      f.properties.daily_precip_mm,
-      f.properties.veg_class,
-      f.properties.elevation_m
-    );
-    // umidità generale del suolo/aria × finestra di incubazione pioggia →
-    // fruttificazione specifica delle specie selezionate (soglia di pioggia
-    // e ritardo tipico) × idoneità del tipo di bosco: senza questo, "Meteo
-    // attuale" ignorerebbe sia il filtro specie sia i tempi di comparsa
-    return { lat, lon, value: (0.3 + 0.7 * conditions) * readiness };
+    const env = envFromWeatherCell(f);
+    const conditions = conditionsQuality(env.soilMoisture, env.humidityPct, env.soilMoistureDeep, env.humidityMinPct);
+    // acqua nel terreno e umidità dell'aria adesso × il punteggio completo
+    // delle specie selezionate (pioggia nella finestra giusta, temperatura
+    // di incubazione, evaporazione, bosco, quota, pH, stagione, suolo caldo
+    // abbastanza): senza, "Meteo attuale" ignorerebbe sia il filtro specie
+    // sia i tempi di comparsa
+    return { lat, lon, value: (0.3 + 0.7 * conditions) * activeSpeciesReadinessAt(env) };
   });
   const maxValue = Math.max(0.01, ...raw.map((z) => z.value));
   return raw.map((z) => ({ ...z, value: z.value / maxValue })).filter((z) => z.value > 0.06);
@@ -1444,7 +1499,14 @@ function zonesForCombinato() {
     // meteo/condizioni del suolo: variano con continuità su decine di km,
     // la cella meteo (0.5°) più vicina va benissimo per questi
     const nearest = nearestWeatherCell(c.lat, c.lon);
-    const conditions = nearest ? conditionsQuality(nearest.properties.soil_moisture, nearest.properties.humidity_pct) : 0.4;
+    const conditions = nearest
+      ? conditionsQuality(
+          nearest.properties.soil_moisture,
+          nearest.properties.humidity_pct,
+          nearest.properties.soil_moisture_deep,
+          nearest.properties.humidity_min_pct
+        )
+      : 0.4;
     // vegetazione e quota invece cambiano bruscamente nel giro di poche
     // centinaia di metri in montagna: qui serve il dato alla risoluzione
     // fine calcolato apposta su questa esatta cella con ritrovamenti,
@@ -1453,8 +1515,12 @@ function zonesForCombinato() {
     const habitat = fineVeg ? fineVeg.habitat_score : nearest ? (nearest.properties.habitat_score ?? 0.5) : 0.5;
     const elevation = fineVeg ? fineVeg.elevation_m : nearest ? nearest.properties.elevation_m : null;
     const vegClass = fineVeg ? fineVeg.veg_class : nearest ? nearest.properties.veg_class : null;
+    // meteo dalla cella grande più vicina, ma vegetazione/quota/pH dal dato
+    // fine calcolato su QUESTA cella: il pH in particolare cambia nel giro di
+    // pochi km (arenaria contro calcare) e prenderlo dalla cella meteo a
+    // 30-40km sarebbe peggio che non averlo
     const readiness = nearest
-      ? activeSpeciesReadinessAt(nearest.properties.daily_dates, nearest.properties.daily_precip_mm, vegClass, elevation)
+      ? activeSpeciesReadinessAt(envFromWeatherCell(nearest, { vegClass, elevation, ph: phAt(c.lat, c.lon) }))
       : 0.5;
     // storico locale × condizioni generali × idoneità del luogo (quota +
     // fascia boschiva) × finestra pioggia-fruttificazione delle specie
@@ -1505,10 +1571,40 @@ function render() {
 
 /* ---------------- Click-to-inspect weather popup ---------------- */
 
-function soilPct(soilMoisture) {
-  if (soilMoisture == null) return null;
-  const pct = ((soilMoisture - 0.05) / (0.4 - 0.05)) * 100;
-  return Math.max(0, Math.min(100, Math.round(pct)));
+// Percentuale d'acqua utile nel terreno, fra punto di appassimento e
+// capacità di campo: 0% = le radici non riescono più a estrarre acqua,
+// 100% = terreno pieno quanto può restare senza drenare.
+function soilPct(soilMoisture, soilMoistureDeep = null) {
+  const mat = soilWaterIndex(soilMoisture);
+  const reserve = soilWaterIndex(soilMoistureDeep);
+  if (mat == null && reserve == null) return null;
+  if (mat == null) return Math.round(reserve * 100);
+  if (reserve == null) return Math.round(mat * 100);
+  return Math.round((0.65 * mat + 0.35 * reserve) * 100);
+}
+
+// Etichetta leggibile del pH: il numero da solo non dice niente a chi va
+// per funghi, la parola sì (e il numero resta accanto per chi lo vuole).
+function phLabel(ph) {
+  const word = ph < 5.0 ? "molto acido" : ph < 6.0 ? "acido" : ph < 6.8 ? "subacido" : ph < 7.4 ? "neutro" : "calcareo";
+  return `${ph.toFixed(1)} · ${word}`;
+}
+
+// Esposizione e pendenza: informative, non entrano nel punteggio. Un
+// versante nord tiene l'umidità più a lungo e uno sud scalda prima in
+// stagione fredda, ma l'effetto dipende da quota, stagione e copertura in
+// modi che non sappiamo quantificare onestamente — quindi il dato si
+// mostra e decide chi va per boschi, invece di far finta di pesarlo.
+const COMPASS = ["nord", "nord-est", "est", "sud-est", "sud", "sud-ovest", "ovest", "nord-ovest"];
+
+function terrainLineHtml(terrain) {
+  if (!terrain || terrain.slopeDeg == null) return "";
+  if (terrain.slopeDeg < 3) {
+    return `<div class="wx-forest-line">${ICONS.slope}<span>Terreno pianeggiante</span></div>`;
+  }
+  const dir = COMPASS[Math.round(terrain.aspectDeg / 45) % 8];
+  const note = terrain.slopeDeg >= 20 ? " ripido" : "";
+  return `<div class="wx-forest-line">${ICONS.slope}<span>Versante ${dir}${note} · ${Math.round(terrain.slopeDeg)}° di pendenza</span></div>`;
 }
 
 function popupSkeleton(lat, lon) {
@@ -1623,11 +1719,19 @@ function popupContent(lat, lon, data, openIdx = null) {
     daysSinceRain == null ? `nessuna (${dates.length}gg)` : daysSinceRain === 0 ? "oggi" : `${daysSinceRain}gg fa`;
 
   const hourly = data.hourly || {};
+  const lastOf = (key) => {
+    const series = (hourly[key] || []).filter((v) => v != null);
+    return series.length ? series[series.length - 1] : null;
+  };
   const humiditySeries = (hourly.relative_humidity_2m || []).filter((v) => v != null);
-  const soilSeries = (hourly.soil_moisture_0_to_1cm || []).filter((v) => v != null);
   const humidity = humiditySeries.length ? Math.round(humiditySeries[humiditySeries.length - 1]) : null;
-  const soil = soilSeries.length ? soilSeries[soilSeries.length - 1] : null;
-  const soilPercent = soilPct(soil);
+  // il minimo delle ultime 72 ore, non il valore dell'istante: sotto il 40%
+  // di minima la crescita dei carpofori si ferma (letteratura B. edulis)
+  const humidityMin = humiditySeries.length ? Math.round(Math.min(...humiditySeries.slice(-72))) : null;
+  const soil = lastOf("soil_moisture_3_to_9cm");
+  const soilDeep = lastOf("soil_moisture_9_to_27cm");
+  const soilTempC = lastOf("soil_temperature_6cm");
+  const soilPercent = soilPct(soil, soilDeep);
 
   const elevation = typeof data.elevation === "number" ? Math.round(data.elevation) : null;
   // vegetazione reale (Corine Land Cover) interrogata dal vivo nel punto
@@ -1635,7 +1739,28 @@ function popupContent(lat, lon, data, openIdx = null) {
   // può distare 30-40km e restituire un tipo di bosco sbagliato
   const vegClass = data.vegClass ?? null;
   const veg = vegetationInfo(vegClass, elevation);
-  const species = speciesReadinessList(dates, precip, vegClass, elevation);
+
+  // Il popup interroga TUTTO sul punto esatto cliccato, non sulla cella
+  // della griglia: pH da SoilGrids ed esposizione/pendenza calcolate da
+  // quattro quote intorno al punto (vedi onMapClick). Sono i due dati che
+  // alla scala della griglia (55km) non avrebbero senso e che qui invece
+  // sono precisi.
+  const env = {
+    dates,
+    precip,
+    temp: (daily.temperature_2m_mean || []).slice(-POPUP_RAIN_DAYS),
+    et0: (daily.et0_fao_evapotranspiration || []).slice(-POPUP_RAIN_DAYS),
+    soilMoisture: soil,
+    soilMoistureDeep: soilDeep,
+    soilTempC,
+    humidityPct: humidity,
+    humidityMinPct: humidityMin,
+    vegClass,
+    elevation,
+    ph: data.ph ?? null,
+  };
+  const species = speciesReadinessList(env);
+  const terrain = data.terrain || null;
 
   // le barre evidenziate sono esattamente i giorni citati nella
   // spiegazione aperta — anche quando è una pioggia recente non ancora
@@ -1676,10 +1801,13 @@ function popupContent(lat, lon, data, openIdx = null) {
 
       <div class="wx-grid">
         ${tile(ICONS.rain, "Pioggia", rainShort)}
-        ${tile(ICONS.elevation, "Quota", elevation != null ? elevation + " m" : "n/d")}
+        ${tile(ICONS.thermometer, "Suolo", soilTempC != null ? Math.round(soilTempC) + "°C" : "n/d")}
         ${tile(ICONS.soil, "Terreno", soilPercent != null ? soilPercent + "%" : "n/d")}
-        ${tile(ICONS.humidity, "Aria", humidity != null ? humidity + "%" : "n/d")}
+        ${tile(ICONS.humidity, "Aria min", humidityMin != null ? humidityMin + "%" : "n/d")}
+        ${tile(ICONS.elevation, "Quota", elevation != null ? elevation + " m" : "n/d")}
+        ${tile(ICONS.ph, "pH suolo", data.ph != null ? phLabel(data.ph) : "n/d")}
       </div>
+      ${terrainLineHtml(terrain)}
 
       ${buildRainChartHtml(dates, precip, highlight)}
 
@@ -2219,7 +2347,8 @@ function onMapClick(e) {
 
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
-    `&daily=precipitation_sum&hourly=relative_humidity_2m,soil_moisture_0_to_1cm` +
+    `&daily=precipitation_sum,temperature_2m_mean,et0_fao_evapotranspiration` +
+    `&hourly=relative_humidity_2m,soil_moisture_3_to_9cm,soil_moisture_9_to_27cm,soil_temperature_6cm` +
     `&past_days=16&forecast_days=1&timezone=auto`;
 
   Promise.all([
@@ -2227,13 +2356,19 @@ function onMapClick(e) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }),
-    // se Corine non risponde, il popup resta comunque utile con meteo/pioggia:
-    // la vegetazione ripiega su "non determinato" invece di far fallire tutto
+    // Corine, SoilGrids e il DEM sono tutti facoltativi: se uno non risponde
+    // il popup resta utile con quel che c'è (il fattore corrispondente vale
+    // 1, cioè neutro) invece di fallire in blocco. Meteo a parte, nessuno di
+    // questi dati vale il rischio di non mostrare nulla.
     fetchClcVegClass(lat, lng).catch(() => null),
+    fetchSoilPh(lat, lng).catch(() => null),
+    fetchTerrain(lat, lng).catch(() => null),
   ])
-    .then(([data, vegClass]) => {
+    .then(([data, vegClass, ph, terrain]) => {
       if (popup.isOpen()) {
         data.vegClass = vegClass;
+        data.ph = ph;
+        data.terrain = terrain;
         lastPopupParams = { lat, lon: lng, data };
         setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
         nudgePopupIntoView(popup);
@@ -2280,12 +2415,26 @@ Promise.all([
   fetch("data/occurrences.geojson").then((r) => r.json()),
   fetch("data/weather_grid.geojson").then((r) => r.json()),
   fetch("data/vegetation_fine.geojson").then((r) => r.json()),
+  // il pH è l'unico dei quattro che può mancare del tutto: la sua cache si
+  // riempie a scaglioni (vedi scripts/fetch_soil_ph.py) e finché è vuota il
+  // fattore vale 1 ovunque, cioè la mappa è esattamente quella di prima
+  fetch("data/soil_ph.json")
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null),
 ])
-  .then(([occGeojson, weatherGeojson, vegFineGeojson]) => {
+  .then(([occGeojson, weatherGeojson, vegFineGeojson, phJson]) => {
     occurrences = occGeojson.features;
     weatherCells = weatherGeojson.features;
     weatherGridStepDeg = weatherGeojson.grid_step_deg || 0.5;
     vegetationFineByKey = new Map(vegFineGeojson.features.map((f) => [f.properties.cell_key, f.properties]));
+    if (phJson && phJson.ph_by_point) {
+      phByPoint = new Map(Object.entries(phJson.ph_by_point));
+      phKeyRoundDeg = phJson.key_round_deg || phKeyRoundDeg;
+    }
+    // le curve stagionali si ricavano dalle date dei ritrovamenti appena
+    // caricati: nessun dato nuovo da scaricare, e si aggiornano da sole
+    // ogni volta che il job settimanale porta nuove osservazioni
+    buildSeasonCurves(occurrences);
     render();
   })
   .catch((err) => {
