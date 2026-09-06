@@ -930,6 +930,41 @@ main {
 .legend.open #legendDesc { display: block; }
 
 /* ---------------------------------------------------------------------
+   Click marker — segna il punto esatto cliccato
+--------------------------------------------------------------------- */
+/* Serve soprattutto su smartphone: lì il popup è fisso al centro schermo
+   (vedi .wx-map-popup più sotto) e si stacca completamente dal punto che
+   descrive — senza un segno sulla mappa non c'era modo di capire quale
+   punto avesse generato i dati mostrati. --accent è il colore che il
+   sistema riserva già a "selezione / azione primaria", quindi il marker
+   non compete con le tinte di specie né con l'acqua (--wet). */
+.click-marker {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+.click-marker-dot {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--accent-ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.click-marker-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  animation: click-marker-pulse 1.6s ease-out infinite;
+}
+@keyframes click-marker-pulse {
+  from { transform: scale(0.4); opacity: 0.8; }
+  to { transform: scale(1.6); opacity: 0; }
+}
+
+/* ---------------------------------------------------------------------
    Weather popup (click-to-inspect)
 --------------------------------------------------------------------- */
 .maplibregl-popup-content { width: min(300px, calc(100vw - 40px)); }

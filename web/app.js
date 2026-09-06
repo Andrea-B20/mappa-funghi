@@ -14,7 +14,6 @@ const ICONS = {
   thermometer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13.5V5a2 2 0 1 1 4 0v8.5a4 4 0 1 1-4 0z"/><path d="M12 9v6"/></svg>`,
   ph: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><path d="M4 3h4M16 3h4"/><path d="M6.6 13h10.8"/></svg>`,
   calendar: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>`,
-  slope: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19h18"/><path d="M4 19L15 6"/><path d="M15 6v6"/></svg>`,
   timer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5v4l2.8 1.8"/><path d="M9.5 2h5"/></svg>`,
 };
 
@@ -77,41 +76,6 @@ async function fetchSoilPh(lat, lon) {
   }
   if (!values.length) return null;
   return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
-}
-
-// Pendenza ed esposizione dal DEM, per differenze finite su quattro quote
-// attorno al punto (~250m per lato). Esiste solo qui e non sulla griglia
-// perché a 0.5° (55km) una "esposizione della cella" non significa nulla:
-// dentro ci stanno versanti opposti. Sul punto cliccato invece è reale.
-const TERRAIN_STEP_M = 250;
-
-async function fetchTerrain(lat, lon) {
-  const dLat = TERRAIN_STEP_M / 111320;
-  const dLon = TERRAIN_STEP_M / (111320 * Math.cos((lat * Math.PI) / 180));
-  const pts = [
-    [lat + dLat, lon],
-    [lat - dLat, lon],
-    [lat, lon + dLon],
-    [lat, lon - dLon],
-  ];
-  const url =
-    "https://api.open-meteo.com/v1/elevation?latitude=" +
-    pts.map((q) => q[0].toFixed(5)).join(",") +
-    "&longitude=" +
-    pts.map((q) => q[1].toFixed(5)).join(",");
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error("HTTP " + resp.status);
-  const [north, south, east, west] = (await resp.json()).elevation || [];
-  if ([north, south, east, west].some((v) => v == null)) return null;
-  // gradiente in m/m: positivo verso nord e verso est
-  const dzdy = (north - south) / (2 * TERRAIN_STEP_M);
-  const dzdx = (east - west) / (2 * TERRAIN_STEP_M);
-  const slopeDeg = (Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI;
-  // l'esposizione è la direzione di DISCESA (dove guarda il versante),
-  // cioè l'opposto del gradiente, riportata in gradi da nord in senso orario
-  let aspectDeg = (Math.atan2(-dzdx, -dzdy) * 180) / Math.PI;
-  if (aspectDeg < 0) aspectDeg += 360;
-  return { slopeDeg, aspectDeg };
 }
 
 async function fetchClcVegClass(lat, lon) {
@@ -876,8 +840,20 @@ setupMapControls();
 
 // Il contenuto del popup meteo viene rigenerato per intero ad ogni
 // aggiornamento (vedi toggleSpeciesDetail): unico punto di scrittura.
+// popup.setHTML() sostituisce l'INTERO innerHTML, quindi lo scroll del
+// contenitore interno (.wx-popup, che scrolla da solo — vedi CSS) torna a
+// zero ogni volta. Prima di riscrivere si salva la posizione, dopo la si
+// riapplica: senza, toccare una specie in fondo a un popup lungo faceva
+// balzare la vista in cima, perdendo il punto in cui si stava leggendo.
 function setPopupHTML(popup, html) {
+  const el = popup.getElement();
+  const scroller = el ? el.querySelector(".wx-popup") : null;
+  const scrollTop = scroller ? scroller.scrollTop : 0;
   popup.setHTML(html);
+  if (scrollTop) {
+    const next = popup.getElement()?.querySelector(".wx-popup");
+    if (next) next.scrollTop = scrollTop;
+  }
 }
 
 /* ---------------- Mappa di calore (overlay canvas) ----------------
@@ -1102,6 +1078,37 @@ const activeSpecies = new Set(Object.keys(SPECIES_META));
 let activePopupInstance = null;
 let lastPopupParams = null;
 let openSpeciesIdx = null;
+
+// Marcatore del punto cliccato: prima l'unico riferimento visivo era il
+// popup stesso, che su smartphone è fisso al centro schermo (vedi
+// .wx-map-popup) e quindi si stacca completamente dal punto che ha
+// generato i dati — capire quale punto della mappa il popup descrive
+// richiedeva ricordarselo. Il marker resta ancorato lì, indipendente da
+// come/dove il popup si posiziona.
+let clickMarker = null;
+
+function placeClickMarker(lat, lng) {
+  if (clickMarker) clickMarker.remove();
+  const el = document.createElement("div");
+  el.className = "click-marker";
+  el.innerHTML = '<span class="click-marker-ring"></span><span class="click-marker-dot"></span>';
+  const marker = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([lng, lat]).addTo(map);
+  clickMarker = marker;
+  return marker;
+}
+
+// Rimuove il marker quando il SUO popup si chiude (tasto ×, tap altrove
+// sulla mappa) — non quando se ne apre uno nuovo: in quel caso è
+// placeClickMarker() stesso a rimuovere il precedente, e per questo il
+// confronto qui sotto è con la variabile catturata alla creazione (marker)
+// e non con clickMarker corrente, che a quel punto potrebbe già essere il
+// marker del popup successivo.
+function bindMarkerToPopup(popup, marker) {
+  popup.on("close", () => {
+    if (clickMarker === marker) clickMarker = null;
+    marker.remove();
+  });
+}
 
 // risoluzione per lo storico/combinato: più fine della griglia meteo
 // (0.5°) perché i punti GBIF sono molto più numerosi e localizzati delle
@@ -1610,23 +1617,6 @@ function phLabel(ph) {
   return `${ph.toFixed(1)} · ${word}`;
 }
 
-// Esposizione e pendenza: informative, non entrano nel punteggio. Un
-// versante nord tiene l'umidità più a lungo e uno sud scalda prima in
-// stagione fredda, ma l'effetto dipende da quota, stagione e copertura in
-// modi che non sappiamo quantificare onestamente — quindi il dato si
-// mostra e decide chi va per boschi, invece di far finta di pesarlo.
-const COMPASS = ["nord", "nord-est", "est", "sud-est", "sud", "sud-ovest", "ovest", "nord-ovest"];
-
-function terrainLineHtml(terrain) {
-  if (!terrain || terrain.slopeDeg == null) return "";
-  if (terrain.slopeDeg < 3) {
-    return `<div class="wx-forest-line">${ICONS.slope}<span>Terreno pianeggiante</span></div>`;
-  }
-  const dir = COMPASS[Math.round(terrain.aspectDeg / 45) % 8];
-  const note = terrain.slopeDeg >= 20 ? " ripido" : "";
-  return `<div class="wx-forest-line">${ICONS.slope}<span>Versante ${dir}${note} · ${Math.round(terrain.slopeDeg)}° di pendenza</span></div>`;
-}
-
 function popupSkeleton(lat, lon) {
   return `
     <div class="wx-popup">
@@ -1780,7 +1770,6 @@ function popupContent(lat, lon, data, openIdx = null) {
     ph: data.ph ?? null,
   };
   const species = speciesReadinessList(env);
-  const terrain = data.terrain || null;
 
   // le barre evidenziate sono esattamente i giorni citati nella
   // spiegazione aperta — anche quando è una pioggia recente non ancora
@@ -1827,7 +1816,6 @@ function popupContent(lat, lon, data, openIdx = null) {
         ${tile(ICONS.elevation, "Quota", elevation != null ? elevation + " m" : "n/d")}
         ${tile(ICONS.ph, "pH suolo", data.ph != null ? phLabel(data.ph) : "n/d")}
       </div>
-      ${terrainLineHtml(terrain)}
 
       ${buildRainChartHtml(dates, precip, highlight)}
 
@@ -2358,6 +2346,7 @@ function onMapClick(e) {
     .addTo(map);
   activePopupInstance = popup;
   lastPopupParams = null;
+  bindMarkerToPopup(popup, placeClickMarker(lat, lng));
   nudgePopupIntoView(popup);
 
   // un tocco sulle righe specie non deve arrivare alla mappa e aprire un
@@ -2376,19 +2365,17 @@ function onMapClick(e) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }),
-    // Corine, SoilGrids e il DEM sono tutti facoltativi: se uno non risponde
-    // il popup resta utile con quel che c'è (il fattore corrispondente vale
-    // 1, cioè neutro) invece di fallire in blocco. Meteo a parte, nessuno di
-    // questi dati vale il rischio di non mostrare nulla.
+    // Corine e SoilGrids sono entrambi facoltativi: se uno non risponde il
+    // popup resta utile con quel che c'è (il fattore corrispondente vale 1,
+    // cioè neutro) invece di fallire in blocco. Meteo a parte, nessuno dei
+    // due vale il rischio di non mostrare nulla.
     fetchClcVegClass(lat, lng).catch(() => null),
     fetchSoilPh(lat, lng).catch(() => null),
-    fetchTerrain(lat, lng).catch(() => null),
   ])
-    .then(([data, vegClass, ph, terrain]) => {
+    .then(([data, vegClass, ph]) => {
       if (popup.isOpen()) {
         data.vegClass = vegClass;
         data.ph = ph;
-        data.terrain = terrain;
         lastPopupParams = { lat, lon: lng, data };
         setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
         nudgePopupIntoView(popup);
