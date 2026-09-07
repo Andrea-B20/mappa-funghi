@@ -1903,30 +1903,38 @@ window.hideRainTip = function () {
 
 // Header (in alto) e legenda (in basso, su mobile a tutta larghezza) sono
 // overlay fissi sopra la mappa: il motore non sa che coprono parte del suo
-// container, e i popup di MapLibre non hanno un auto-pan proprio. Dopo
-// l'apertura misuriamo dove è finito davvero il popup e lo spostiamo quel
-// tanto che basta perché non resti dietro a quegli elementi.
+// container, e sceglie da solo il lato del popup (l'"anchor": in quale
+// angolo/lato sta la freccia rispetto al box) guardando SOLO le dimensioni
+// del canvas, senza accorgersi che una parte è coperta.
 //
-// Prima si usava map.panBy(): sposta la MAPPA di N pixel, e N pixel
-// corrispondono a una distanza geografica che dipende dallo zoom. Alla
-// vista iniziale (zoom 5, tutta Italia) un aggiustamento di appena
-// ~120px — nulla di che a uno zoom cittadino — spostava il centro mappa
-// di ~2° di latitudine, cioè centinaia di km: il popup restava al posto
-// giusto sullo schermo, ma tutto il resto (l'intera heatmap) scattava
-// vistosamente sotto di esso. Da qui il "lo schermo fa un movimento
-// strano" segnalato. popup.setOffset() invece sposta SOLO il popup, in
-// pixel schermo, senza toccare la mappa sottostante: stessa correzione
-// visiva, zero movimento del mondo qualunque sia lo zoom.
-function nudgePopupIntoView(popup) {
-  // su smartphone il popup è fisso sullo schermo (vedi .wx-map-popup in
-  // CSS): spostarlo qui non serve più
+// Prima si correggeva con map.panBy() (spostava la mappa: causava un
+// salto geografico enorme a zoom bassi, vedi commit precedente) e poi con
+// popup.setOffset() (spostava l'INTERO box, freccia compresa, di N pixel
+// fissi): quel secondo approccio evitava il salto della mappa ma introduceva
+// un difetto diverso, quello segnalato ("la freccia è errata"). setOffset()
+// trasla in blocco box+freccia rispetto al punto cliccato sulla mappa: se
+// il box viene spostato per non finire sotto l'header, la freccia si sposta
+// insieme a lui e non punta più al punto vero, ma a un punto spostato di
+// quanto lo era il box.
+//
+// La freccia di MapLibre invece punta SEMPRE esattamente al punto cliccato
+// finché non si tocca l'offset: è ancorata a un lato del box (sopra, sotto,
+// sinistra, destra o un angolo) e quel lato resta incollato alla mappa. Per
+// evitare header/legenda senza spostare la freccia, quindi, non bisogna
+// spostare il box: bisogna scegliere il lato giusto (l'anchor) in base allo
+// spazio reale disponibile intorno al click, così il box cresce dal lato
+// libero invece di finire sotto agli overlay.
+function updatePopupAnchor(popup) {
+  // su smartphone il popup è fisso sullo schermo e la freccia è nascosta
+  // (vedi .wx-map-popup in CSS): non serve calcolare nulla
   if (window.matchMedia("(max-width: 720px), (max-height: 480px)").matches) return;
   requestAnimationFrame(() => {
     const el = popup.getElement();
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    if (!rect.height) return;
+    if (!rect.width || !rect.height) return;
 
+    const pos = map.project(popup.getLngLat());
     const header = document.querySelector(".topbar");
     const legend = document.getElementById("legend");
     const margin = 12;
@@ -1935,38 +1943,49 @@ function nudgePopupIntoView(popup) {
     const bottomLimit = legendVisible
       ? legend.getBoundingClientRect().top - margin
       : window.innerHeight - margin;
+    const leftLimit = margin;
+    const rightLimit = window.innerWidth - margin;
 
-    // di quanto deve spostarsi IL POPUP sullo schermo (segno screen-space:
-    // positivo = giù/destra), non più "di quanto va panata la mappa"
-    let shiftY = 0;
-    if (rect.top < topLimit) shiftY = topLimit - rect.top;
-    else if (rect.bottom > bottomLimit) shiftY = -Math.min(rect.bottom - bottomLimit, rect.top - topLimit);
+    // verticale: "top" = freccia sopra, box che cresce verso il basso (va
+    // bene se c'è spazio SOTTO al click); "bottom" = il contrario. Se
+    // entra da un solo lato si usa quello, altrimenti quello con più spazio
+    const spaceAbove = pos.y - topLimit;
+    const spaceBelow = bottomLimit - pos.y;
+    const fitsBelow = rect.height <= spaceBelow;
+    const fitsAbove = rect.height <= spaceAbove;
+    let vertical;
+    if (fitsBelow && !fitsAbove) vertical = "top";
+    else if (fitsAbove && !fitsBelow) vertical = "bottom";
+    else vertical = spaceBelow >= spaceAbove ? "top" : "bottom";
 
-    let shiftX = 0;
-    if (rect.left < margin) shiftX = margin - rect.left;
-    else if (rect.right > window.innerWidth - margin) {
-      shiftX = -Math.min(rect.right - (window.innerWidth - margin), rect.left - margin);
-    }
+    // orizzontale: di norma il box resta centrato sul click; solo se così
+    // finirebbe fuori dal bordo sinistro/destro si ancora quel lato al
+    // click e lo si fa crescere verso l'altro
+    const halfWidth = rect.width / 2;
+    let horizontal = "";
+    if (pos.x - halfWidth < leftLimit) horizontal = "left";
+    else if (pos.x + halfWidth > rightLimit) horizontal = "right";
 
-    if (shiftX || shiftY) {
-      // cumulativo: una seconda chiamata (dopo che il contenuto cresce
-      // caricando i dati) corregge ULTERIORMENTE rispetto a un eventuale
-      // offset già applicato dalla prima, non lo sovrascrive
-      popup._wxOffsetX = (popup._wxOffsetX || 0) + shiftX;
-      popup._wxOffsetY = (popup._wxOffsetY || 0) + shiftY;
-      popup.setOffset([popup._wxOffsetX, popup._wxOffsetY]);
+    const anchor = horizontal ? `${vertical}-${horizontal}` : vertical;
+    if (popup.options.anchor !== anchor) {
+      popup.options.anchor = anchor;
+      // forza MapLibre a ricalcolare posizione/classi CSS con il nuovo
+      // anchor: setLngLat è pubblico e richiama internamente lo stesso
+      // aggiornamento usato per il pan della mappa, senza spostare nulla
+      // (la posizione impostata è la stessa già attiva)
+      popup.setLngLat(popup.getLngLat());
     }
   });
 }
 
 // Comparsa del popup: una leggera dissolvenza + scala invece di un pop
-// istantaneo. Chiamata negli stessi 2 momenti in cui nudgePopupIntoView
-// può spostare la mappa (apertura con lo scheletro, poi di nuovo quando
-// arrivano i dati e il contenuto cresce): prima il contenuto cambiava
-// dimensione all'istante e SOLO DOPO la mappa scorreva per fargli spazio,
-// due eventi slegati che si vedevano come un salto verso il basso
-// ("lo schermo fa un movimento strano"). Facendoli coincidere, lo scorrimento
-// della mappa e la comparsa del contenuto si leggono come un solo movimento.
+// istantaneo. Chiamata negli stessi 2 momenti in cui updatePopupAnchor
+// può cambiare lato al popup (apertura con lo scheletro, poi di nuovo
+// quando arrivano i dati e il contenuto cresce): prima il contenuto
+// cambiava dimensione all'istante e SOLO DOPO l'anchor veniva ricalcolato,
+// due eventi slegati che si vedevano come un salto. Facendoli coincidere,
+// il cambio di lato e la comparsa del contenuto si leggono come un solo
+// movimento.
 function animatePopupReveal(popup) {
   const content = popup.getElement()?.querySelector(".maplibregl-popup-content");
   if (!content || !content.animate) return;
@@ -2787,7 +2806,7 @@ function onMapClick(e) {
   lastPopupParams = null;
   bindMarkerToPopup(popup, placeClickMarker(lat, lng));
   makePopupCloseAnimated(popup);
-  nudgePopupIntoView(popup);
+  updatePopupAnchor(popup);
   animatePopupReveal(popup);
 
   // un tocco sulle righe specie non deve arrivare alla mappa e aprire un
@@ -2819,7 +2838,7 @@ function onMapClick(e) {
         data.ph = ph;
         lastPopupParams = { lat, lon: lng, data };
         setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
-        nudgePopupIntoView(popup);
+        updatePopupAnchor(popup);
         animatePopupReveal(popup);
       }
     })
