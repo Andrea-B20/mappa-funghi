@@ -1942,6 +1942,59 @@ function nudgePopupIntoView(popup) {
   });
 }
 
+// Comparsa del popup: una leggera dissolvenza + scala invece di un pop
+// istantaneo. Chiamata negli stessi 2 momenti in cui nudgePopupIntoView
+// può spostare la mappa (apertura con lo scheletro, poi di nuovo quando
+// arrivano i dati e il contenuto cresce): prima il contenuto cambiava
+// dimensione all'istante e SOLO DOPO la mappa scorreva per fargli spazio,
+// due eventi slegati che si vedevano come un salto verso il basso
+// ("lo schermo fa un movimento strano"). Facendoli coincidere, lo scorrimento
+// della mappa e la comparsa del contenuto si leggono come un solo movimento.
+function animatePopupReveal(popup) {
+  const content = popup.getElement()?.querySelector(".maplibregl-popup-content");
+  if (!content || !content.animate) return;
+  content.animate(
+    [
+      { opacity: 0, transform: "translateY(4px) scale(0.97)" },
+      { opacity: 1, transform: "translateY(0) scale(1)" },
+    ],
+    { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+  );
+}
+
+// Chiusura animata: MapLibre rimuove il nodo dal DOM in modo sincrono e SOLO
+// DOPO emette l'evento "close" (vedi bindMarkerToPopup), quindi a quel punto
+// il nodo non c'è già più e non si può più animarne l'uscita. Sovrascriviamo
+// remove() sulla singola istanza per far girare la dissolvenza PRIMA della
+// rimozione vera: sia il tasto "×" di MapLibre sia il "click altrove"
+// (closeOnClick, attivo di default) chiamano entrambi popup.remove(), quindi
+// intercettarlo qui basta per coprire entrambi i modi di chiudere.
+function makePopupCloseAnimated(popup) {
+  const realRemove = popup.remove.bind(popup);
+  popup.remove = () => {
+    const content = popup.getElement()?.querySelector(".maplibregl-popup-content");
+    if (!content || !content.animate) {
+      realRemove();
+      return popup;
+    }
+    content.style.pointerEvents = "none";
+    const anim = content.animate(
+      [
+        { opacity: 1, transform: "translateY(0) scale(1)" },
+        { opacity: 0, transform: "translateY(4px) scale(0.97)" },
+      ],
+      // fill:"forwards" tiene il popup invisibile una volta finita
+      // l'animazione: senza, appena l'effetto termina l'opacità torna di
+      // scatto al valore naturale (1, opaco) per l'istante che separa la
+      // fine dell'animazione dalla vera rimozione dal DOM (il .then() qui
+      // sotto), con un flash indesiderato subito prima che sparisca
+      { duration: 160, easing: "ease", fill: "forwards" }
+    );
+    anim.finished.then(realRemove, realRemove);
+    return popup;
+  };
+}
+
 /* ---------------- Notifiche pioggia (zone disegnate + OneSignal) ---- */
 
 // App ID dell'app OneSignal collegata al sito (onesignal.com > Settings >
@@ -2716,7 +2769,9 @@ function onMapClick(e) {
   activePopupInstance = popup;
   lastPopupParams = null;
   bindMarkerToPopup(popup, placeClickMarker(lat, lng));
+  makePopupCloseAnimated(popup);
   nudgePopupIntoView(popup);
+  animatePopupReveal(popup);
 
   // un tocco sulle righe specie non deve arrivare alla mappa e aprire un
   // secondo popup sopra quello attuale
@@ -2748,6 +2803,7 @@ function onMapClick(e) {
         lastPopupParams = { lat, lon: lng, data };
         setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
         nudgePopupIntoView(popup);
+        animatePopupReveal(popup);
       }
     })
     .catch((err) => {
