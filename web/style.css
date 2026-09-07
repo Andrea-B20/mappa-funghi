@@ -478,9 +478,16 @@ main {
   border: 1px solid var(--border-strong) !important;
   padding: 0 !important;
 }
+/* la freccia è un triangolo CSS fatto di bordi: quella sopra/sotto usa
+   border-top/bottom-color, quella laterale (popup apribile anche a
+   sinistra/destra, vedi updatePopupAnchor in app.js) border-left/right-color
+   — vanno colorate entrambe le coppie o la freccia laterale resta del
+   colore di default invece che dello sfondo del popup */
 .maplibregl-popup-tip {
   border-top-color: var(--surface) !important;
   border-bottom-color: var(--surface) !important;
+  border-left-color: var(--surface) !important;
+  border-right-color: var(--surface) !important;
 }
 .maplibregl-popup-close-button {
   color: var(--text-faint) !important;
