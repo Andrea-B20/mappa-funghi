@@ -738,6 +738,36 @@ document.getElementById("legend").addEventListener("transitionend", (e) => {
 });
 updateLayerToggleOffset();
 
+// su mobile l'apertura/chiusura della legenda anima max-height per 0.3s:
+// un solo updateLayerToggleOffset() dopo il toggle leggeva l'altezza
+// ANCORA a inizio transizione (il rect non si è ancora mosso di un frame),
+// quindi il pulsante restava fermo nella posizione vecchia per tutta
+// l'animazione e scattava in posizione solo alla fine (via il listener
+// "transitionend" sopra) — il "finisce sotto e poco dopo si riallinea"
+// segnalato. Qui invece lo si insegue ad ogni frame per la durata
+// dell'animazione, disattivando la sua transizione CSS su bottom (che
+// altrimenti farebbe rincorrere con ritardo un bersaglio già aggiornato
+// ad ogni frame, sommando due animazioni)
+let layerToggleFollowRaf = null;
+function followLegendHeightChange() {
+  const menu = document.getElementById("layerMenu");
+  if (!menu) return;
+  if (layerToggleFollowRaf) cancelAnimationFrame(layerToggleFollowRaf);
+  const prevTransition = menu.style.transition;
+  menu.style.transition = "none";
+  const start = performance.now();
+  const step = (now) => {
+    updateLayerToggleOffset();
+    if (now - start < 360) {
+      layerToggleFollowRaf = requestAnimationFrame(step);
+    } else {
+      menu.style.transition = prevTransition;
+      layerToggleFollowRaf = null;
+    }
+  };
+  layerToggleFollowRaf = requestAnimationFrame(step);
+}
+
 new ResizeObserver(() => {
   map.resize();
   resizeHeatCanvas();
@@ -1164,10 +1194,10 @@ function setupMobileMenus() {
   legendInfoBtn.addEventListener("click", () => {
     const open = legend.classList.toggle("open");
     legendInfoBtn.setAttribute("aria-expanded", String(open));
-    // su desktop l'apertura è un display toggle istantaneo (nessun
-    // transitionend a cui appoggiarsi come su mobile), quindi va
-    // ricalcolato subito qui
-    updateLayerToggleOffset();
+    // su desktop l'apertura è un display toggle istantaneo, su mobile è
+    // una transizione di 0.3s: la funzione insegue entrambi i casi (su
+    // desktop si ferma da sola al primo frame, essendo già a target)
+    followLegendHeightChange();
   });
 }
 
