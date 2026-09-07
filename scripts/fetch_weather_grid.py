@@ -36,10 +36,15 @@ LON_MIN, LON_MAX, LON_STEP = 6.5, 18.8, 0.5
 # le celle il cui centro cade fino a questa distanza (in gradi, ~ km/111) fuori
 # dal confine vengono comunque incluse: senza un piccolo margine, la
 # semplificazione del poligono perderebbe punti costieri legittimi. Un
-# margine troppo largo però include ampie porzioni di mare aperto nei golfi
-# (Taranto, Genova, ecc.), quindi lo teniamo piccolo e affidiamo il filtro
-# fine al controllo di quota reale (vedi elevation_m <= 0 più sotto)
-COASTAL_BUFFER_DEG = 0.03
+# margine troppo largo però non è solo un problema di mare aperto nei golfi
+# (quello lo scarta comunque il controllo di quota reale, elevation_m <= 0
+# più sotto): vicino ai confini terrestri include anche territorio straniero
+# vero — verificato che 0.03° faceva rientrare celle sulla griglia in
+# Svizzera (Lugano/Ticino), Francia (val di Susa) e Slovenia, tutte a quota
+# positiva quindi non intercettate dal controllo sul mare. Un margine
+# minimo tiene comunque i punti costieri (il controllo su elevation_m fa il
+# resto) senza sconfinare
+COASTAL_BUFFER_DEG = 0.002
 
 PAST_DAYS = 16
 BATCH_SIZE = 25

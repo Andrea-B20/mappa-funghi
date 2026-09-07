@@ -48,6 +48,8 @@ import time
 from pathlib import Path
 
 import requests
+from shapely.geometry import Point, shape
+from shapely.prepared import prep
 
 GBIF_URL = "https://api.gbif.org/v1/occurrence/search"
 INATURALIST_URL = "https://api.inaturalist.org/v1/observations"
@@ -65,16 +67,54 @@ SPECIES = {
     "gallinaccio": ("Gallinaccio", "Cantharellus cibarius"),
 }
 
-# bounding box approssimativo dell'Italia (usato solo per iNaturalist, che
-# non ha un filtro "country" diretto come GBIF)
+# bounding box approssimativo dell'Italia: solo un prefiltro grezzo lato
+# server per iNaturalist (che non ha un filtro "country" diretto come GBIF),
+# NON il confine vero — un rettangolo include ampie porzioni di Svizzera,
+# Austria, Slovenia, Francia e Croazia. Il confine reale (stesso poligono
+# OSM usato per la griglia meteo, vedi filter_within_italy) è applicato dopo
+# il fetch su TUTTI i record, GBIF compreso: anche il tag "country=IT" di
+# GBIF non è garanzia — può derivare dalla località dichiarata dall'osservatore
+# invece che dal punto geografico vero
 IT_BBOX = {"swlat": 35.2, "swlng": 6.0, "nelat": 47.3, "nelng": 19.0}
+
+# margine minimo, solo per assorbire l'imprecisione GPS/geocoding di un
+# ritrovamento vero vicino al confine — non il margine costiero largo
+# 0.03° della griglia meteo (scripts/fetch_weather_grid.py): qui i punti
+# sono osservazioni reali, non una griglia sintetica da compensare, e vicino
+# a confini terrestri complessi un margine ampio inghiotte città estere
+# vicinissime al confine (verificato: 0.03° include Lugano, in Svizzera ma
+# a soli ~2.8km dal confine italiano nella zona di Campione d'Italia)
+BORDER_BUFFER_DEG = 0.01
 
 GBIF_PAGE_SIZE = 300
 GBIF_MAX_RECORDS = 3000
 INAT_PAGE_SIZE = 200
 INAT_MAX_PAGES = 15  # 15*200 = 3000 record max per specie, come GBIF
 
+BOUNDARY_PATH = Path(__file__).resolve().parent.parent / "data" / "italy_boundary.geojson"
 OUT_PATH = Path(__file__).resolve().parent.parent / "web" / "data" / "occurrences.geojson"
+
+
+def load_italy_polygon():
+    if not BOUNDARY_PATH.exists():
+        raise SystemExit(
+            f"Confine Italia mancante ({BOUNDARY_PATH}). "
+            "Esegui prima: .venv/bin/python scripts/fetch_italy_boundary.py"
+        )
+    geometry = json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
+    polygon = shape(geometry).simplify(0.01, preserve_topology=True)
+    return polygon.buffer(BORDER_BUFFER_DEG)
+
+
+def filter_within_italy(records):
+    prepared = prep(load_italy_polygon())
+    kept, discarded = [], 0
+    for r in records:
+        if prepared.contains(Point(r["lon"], r["lat"])):
+            kept.append(r)
+        else:
+            discarded += 1
+    return kept, discarded
 
 
 def fetch_gbif(scientific_name):
@@ -216,6 +256,10 @@ def main():
 
         merged, duplicates = merge_dedupe(gbif_records, inat_records)
         print(f"  Totale dopo deduplica: {len(merged)} (scartati {duplicates} duplicati)")
+
+        merged, outside = filter_within_italy(merged)
+        if outside:
+            print(f"  Scartati {outside} record fuori dal confine italiano (bbox troppo largo o geolocalizzazione errata)")
 
         for r in merged:
             features.append(
