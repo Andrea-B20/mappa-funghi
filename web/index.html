@@ -109,18 +109,66 @@
 
     <div class="zone-panel" id="zonePanel" hidden>
       <div class="zone-panel-head">
-        <h2>Notifiche pioggia</h2>
+        <h2>Notifiche</h2>
         <button class="zone-panel-close" id="zonePanelClose" type="button" aria-label="Chiudi">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
         </button>
       </div>
-      <p class="zone-panel-hint" id="zoneDrawHint" hidden>Trascina sulla mappa per disegnare il contorno della zona, rilascia per chiuderla.</p>
-      <ul class="zone-list" id="zoneList"></ul>
-      <p class="zone-panel-empty" id="zoneEmpty">Nessuna zona ancora disegnata.</p>
-      <div class="zone-panel-actions">
-        <button class="zone-btn zone-btn-primary" id="zoneDrawBtn" type="button">Disegna nuova zona</button>
-        <button class="zone-btn" id="zoneDrawCancel" type="button" hidden>Annulla disegno</button>
+
+      <!-- due modalità indipendenti, entrambe attive contemporaneamente se
+           configurate: la zona disegnata avvisa di pioggia su un contorno
+           preciso, "vicino a casa" avvisa di prontezza (l'intero modello,
+           non solo la pioggia) in un raggio da un indirizzo -->
+      <div class="notify-tabs" id="notifyTabs" role="tablist">
+        <button class="notify-tab active" id="notifyTabZones" type="button" role="tab" aria-selected="true">Zone</button>
+        <button class="notify-tab" id="notifyTabHome" type="button" role="tab" aria-selected="false">Vicino a casa</button>
       </div>
+
+      <div class="notify-tab-panel" id="notifyPanelZones">
+        <p class="zone-panel-hint" id="zoneDrawHint" hidden>Trascina sulla mappa per disegnare il contorno della zona, rilascia per chiuderla.</p>
+        <ul class="zone-list" id="zoneList"></ul>
+        <p class="zone-panel-empty" id="zoneEmpty">Nessuna zona ancora disegnata.</p>
+        <div class="zone-panel-actions">
+          <button class="zone-btn zone-btn-primary" id="zoneDrawBtn" type="button">Disegna nuova zona</button>
+          <button class="zone-btn" id="zoneDrawCancel" type="button" hidden>Annulla disegno</button>
+        </div>
+      </div>
+
+      <div class="notify-tab-panel" id="notifyPanelHome" hidden>
+        <p class="zone-panel-hint">Un avviso quando le specie scelte sembrano pronte (o in arrivo) entro un raggio dall'indirizzo che indichi.</p>
+
+        <div class="home-search" id="homeSearch">
+          <form id="homeSearchForm" autocomplete="off">
+            <input class="home-search-input" type="text" id="homeSearchInput" placeholder="Cerca un indirizzo…" autocomplete="off" spellcheck="false" />
+          </form>
+          <ul class="location-search-results" id="homeSearchResults" hidden></ul>
+        </div>
+
+        <div class="home-form" id="homeForm" hidden>
+          <div class="home-current">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5" /><path d="M6 10v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-9" /></svg>
+            <span id="homeCurrentLabel"></span>
+          </div>
+
+          <label class="home-field">
+            <span>Raggio di ricerca</span>
+            <div class="home-radius-input">
+              <input type="number" id="homeRadiusInput" min="1" max="80" step="1" value="20" inputmode="numeric" />
+              <span>km</span>
+            </div>
+          </label>
+
+          <p class="home-field-label">Specie da segnalare</p>
+          <div class="home-species" id="homeSpecies"></div>
+
+          <div class="zone-panel-actions">
+            <button class="zone-btn zone-btn-primary" id="homeSaveBtn" type="button" disabled>Salva</button>
+            <button class="zone-btn" id="homeRemoveBtn" type="button" hidden>Rimuovi</button>
+          </div>
+          <p class="zone-panel-hint" id="homeStatus" hidden></p>
+        </div>
+      </div>
+
       <button class="zone-btn zone-enable-push" id="zoneEnablePush" type="button" hidden>Attiva notifiche push</button>
       <p class="zone-panel-hint" id="zonePushStatus" hidden></p>
     </div>

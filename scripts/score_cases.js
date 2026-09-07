@@ -77,6 +77,13 @@ const results = payload.cases.map((c) => {
     label: c.label,
     scores,
     scoreNew: scores[weightings[0].name],
+    // "tier" espone la STESSA soglia calibrata che usa la mappa
+    // (READY_THRESHOLD/SOON_THRESHOLD in web/model.js), così chi consuma
+    // questo output — scripts/send_notifications.py — non deve tenere una
+    // sua copia dei due numeri: leggerebbe "pronto" con soglie diverse da
+    // quelle che l'utente vede aprendo il sito, lo stesso disallineamento
+    // già corretto due volte fra grafico/testo e badge/verdetto.
+    tier: model.speciesTier(scores[weightings[0].name]),
     scoreOld,
     rainScore: rainFull.rainScore,
     tempFactor: rainFull.tempFactor,

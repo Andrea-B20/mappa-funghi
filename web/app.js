@@ -151,32 +151,14 @@ function speciesReadinessList(env) {
     .sort((a, b) => b.score - a.score);
 }
 
-/* SOGLIE DEGLI ALERT — calibrate, non scelte.
-
-   Prima erano numeri presi guardando la distribuzione sulla griglia e
-   chiedendosi quante celle finissero in verde: un criterio estetico, che
-   non voleva dire niente per chi legge.
-
-   Ora vengono dal backtest e hanno un significato verificabile. Sono i
-   percentili dei punteggi calcolati SUI RITROVAMENTI VERI, cioè su luoghi e
-   giorni in cui quel fungo è stato davvero raccolto:
-     - "pronto"    = mediana dei ritrovamenti. Metà delle raccolte reali è
-                     avvenuta in condizioni almeno così buone.
-     - "in arrivo" = primo quartile. Sotto questa soglia si sta sotto il 75%
-                     delle raccolte reali.
-   Per confronto, la mediana dei giorni di controllo (stesso posto, stagione
-   diversa) è 0.022: sta ben sotto anche la soglia bassa, che è esattamente
-   ciò che serve perché il semaforo distingua qualcosa.
-
-   Vanno rifatte con scripts/backtest_model.py ogni volta che cambiano i
-   pesi o i fattori: sono conseguenze della scala del punteggio, non
-   costanti indipendenti. */
-const READY_THRESHOLD = 0.185;
-const SOON_THRESHOLD = 0.043;
-
+/* Soglie e speciesTier() vivono in web/model.js (caricato prima come
+   script classico, quindi READY_THRESHOLD/SOON_THRESHOLD/speciesTier sono
+   già globali qui): le usano anche le notifiche "vicino a casa" lato
+   server, e un secondo set di numeri qui avrebbe potuto disallinearsi. */
 function speciesStatusBadge(r) {
-  if (r.score >= READY_THRESHOLD) return { word: "pronto", cls: "ready" };
-  if (r.score >= SOON_THRESHOLD) return { word: "in arrivo", cls: "soon" };
+  const tier = speciesTier(r.score);
+  if (tier === "ready") return { word: "pronto", cls: "ready" };
+  if (tier === "soon") return { word: "in arrivo", cls: "soon" };
   return { word: "non ora", cls: "none" };
 }
 
@@ -1920,6 +1902,33 @@ try {
   notifyZones = [];
 }
 
+// "vicino a casa": un punto + raggio + specie scelte, a differenza delle
+// zone non è un contorno disegnato ma un cerchio attorno a un indirizzo
+// cercato — e a differenza delle zone non avvisa di pioggia ma di
+// PRONTEZZA (l'intero modello), calcolata lato server campionando punti
+// nel raggio (vedi scripts/send_notifications.py, ring_points()).
+const NOTIFY_HOME_KEY = "mappaFunghi.notifyHome";
+// oltre questo raggio "vicino a casa" smette di voler dire qualcosa; deve
+// restare uguale al tetto lato server (MAX_RADIUS_KM in
+// scripts/send_notifications.py) — il client taglia qui solo per dare un
+// feedback immediato, il server non si fida comunque del valore ricevuto
+const MAX_HOME_RADIUS_KM = 80;
+
+let notifyHome = null;
+try {
+  const raw = localStorage.getItem(NOTIFY_HOME_KEY);
+  notifyHome = raw ? JSON.parse(raw) : null;
+} catch {
+  notifyHome = null;
+}
+// il posto mostrato/in modifica nel pannello: inizializzato dalla casa già
+// salvata (se c'è), poi aggiornato quando si sceglie un risultato di
+// ricerca. Tenuto separato da notifyHome perché "Salva" deve restare un
+// passo esplicito — scegliere un indirizzo non deve da solo attivare le
+// notifiche prima che raggio e specie siano confermati
+let homeDraft = notifyHome ? { label: notifyHome.label, lat: notifyHome.lat, lon: notifyHome.lon } : null;
+const homeSpeciesSelection = new Set(notifyHome ? notifyHome.species : []);
+
 let drawingZone = false;
 let drawPoints = [];
 let drawPointerId = null;
@@ -2048,7 +2057,14 @@ function requestPushPermission(onResult) {
       await new Promise((r) => setTimeout(r, 300));
     }
     syncPushSubscriptionState(OneSignal);
-    if (pushSubscribed) syncZoneTags();
+    // un permesso concesso qui può riguardare una casa già salvata prima
+    // ancora di avere il permesso (il pulsante "Attiva notifiche push" è
+    // condiviso), quindi entrambi i tag vanno sincronizzati, non solo quello
+    // della funzione da cui l'utente è passato per attivarle
+    if (pushSubscribed) {
+      syncZoneTags();
+      syncHomeTag();
+    }
     onResult(pushSubscribed);
   });
 }
@@ -2147,8 +2163,9 @@ function renderZoneList() {
   // il pulsante sparisce solo quando OneSignal conferma una sottoscrizione
   // reale, non appena il flag locale dice "attivo": legarlo al flag lasciava
   // senza via d'uscita chi era rimasto con il flag impostato ma senza
-  // iscrizione (e nasconderlo dipendeva dal buon esito dell'init dell'SDK)
-  document.getElementById("zoneEnablePush").hidden = notifyZones.length === 0 || pushIsActive();
+  // iscrizione (e nasconderlo dipendeva dal buon esito dell'init dell'SDK).
+  // Condiviso fra zone e casa: una sola sottoscrizione push serve entrambe.
+  document.getElementById("zoneEnablePush").hidden = (notifyZones.length === 0 && !notifyHome) || pushIsActive();
 }
 
 function lngLatFromPointerEvent(e) {
@@ -2330,6 +2347,216 @@ function setupRainZone() {
   }
 }
 
+function persistHome() {
+  if (notifyHome) localStorage.setItem(NOTIFY_HOME_KEY, JSON.stringify(notifyHome));
+  else localStorage.removeItem(NOTIFY_HOME_KEY);
+}
+
+// un solo tag OneSignal "notify_home" (oggetto JSON), simmetrico a
+// "notify_zones": qui però c'è al più UNA casa, quindi niente lista — se
+// non è impostata il tag va rimosso, non lasciato vuoto
+function syncHomeTag() {
+  if (localStorage.getItem(PUSH_ENABLED_KEY) !== "1") return;
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    try {
+      if (notifyHome) {
+        await OneSignal.User.addTags({
+          notify_home: JSON.stringify({
+            lat: Number(notifyHome.lat.toFixed(4)),
+            lon: Number(notifyHome.lon.toFixed(4)),
+            radiusKm: notifyHome.radiusKm,
+            species: notifyHome.species,
+          }),
+        });
+      } else {
+        await OneSignal.User.removeTags(["notify_home"]);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  });
+}
+
+// Checkbox specie per il pannello "vicino a casa": stesso pattern visivo
+// di buildFilters() (chip + pallino colore reale), ma uno stato TUTTO SUO
+// (homeSpeciesSelection) — selezionare "solo ovoli" qui non deve toccare
+// il filtro specie che colora la mappa, sono due scelte indipendenti.
+function buildHomeSpecies() {
+  const container = document.getElementById("homeSpecies");
+  Object.entries(SPECIES_META).forEach(([key, meta]) => {
+    const chip = document.createElement("label");
+    chip.className = "chip" + (homeSpeciesSelection.has(key) ? " active" : "");
+    chip.innerHTML = `<input type="checkbox" ${homeSpeciesSelection.has(key) ? "checked" : ""} /><span class="dot" style="background:${meta.color}"></span>${meta.label}`;
+    chip.querySelector("input").addEventListener("change", (e) => {
+      if (e.target.checked) homeSpeciesSelection.add(key);
+      else homeSpeciesSelection.delete(key);
+      chip.classList.toggle("active", e.target.checked);
+      updateHomeSaveEnabled();
+    });
+    container.appendChild(chip);
+  });
+}
+
+function updateHomeSaveEnabled() {
+  document.getElementById("homeSaveBtn").disabled = !homeDraft || homeSpeciesSelection.size === 0;
+}
+
+// Riflette lo stato (homeDraft/notifyHome) sul DOM: chiamata dopo ogni
+// scelta di un indirizzo, dopo il salvataggio e dopo la rimozione, così il
+// pannello non può disallinearsi da cosa è realmente impostato.
+function renderHomePanel() {
+  const form = document.getElementById("homeForm");
+  const label = document.getElementById("homeCurrentLabel");
+  const radiusInput = document.getElementById("homeRadiusInput");
+  const removeBtn = document.getElementById("homeRemoveBtn");
+
+  form.hidden = !homeDraft;
+  if (homeDraft) {
+    label.textContent = homeDraft.label;
+    radiusInput.value = notifyHome ? notifyHome.radiusKm : radiusInput.value || 20;
+  }
+  removeBtn.hidden = !notifyHome;
+  updateHomeSaveEnabled();
+}
+
+function setupHomeNotify() {
+  buildHomeSpecies();
+  renderHomePanel();
+
+  // tab Zone / Vicino a casa: due pannelli, uno visibile alla volta
+  const tabZones = document.getElementById("notifyTabZones");
+  const tabHome = document.getElementById("notifyTabHome");
+  const panelZones = document.getElementById("notifyPanelZones");
+  const panelHome = document.getElementById("notifyPanelHome");
+  const selectTab = (zones) => {
+    tabZones.classList.toggle("active", zones);
+    tabHome.classList.toggle("active", !zones);
+    tabZones.setAttribute("aria-selected", String(zones));
+    tabHome.setAttribute("aria-selected", String(!zones));
+    panelZones.hidden = !zones;
+    panelHome.hidden = zones;
+  };
+  tabZones.addEventListener("click", () => selectTab(true));
+  tabHome.addEventListener("click", () => selectTab(false));
+
+  // ricerca indirizzo: stesso endpoint Nominatim della ricerca località in
+  // alto (vedi NOMINATIM_SEARCH_URL), lista risultati indipendente
+  const input = document.getElementById("homeSearchInput");
+  const form = document.getElementById("homeSearchForm");
+  const resultsList = document.getElementById("homeSearchResults");
+  let debounceTimer = null;
+  let abortController = null;
+
+  const hideResults = () => {
+    resultsList.hidden = true;
+    resultsList.innerHTML = "";
+  };
+
+  function renderResults(results) {
+    resultsList.innerHTML = "";
+    if (!results.length) {
+      hideResults();
+      return;
+    }
+    results.forEach((r) => {
+      const lat = parseFloat(r.lat);
+      const lon = parseFloat(r.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      const li = document.createElement("li");
+      li.className = "location-search-result";
+      li.textContent = shortLocationLabel(r.display_name);
+      li.addEventListener("click", () => {
+        homeDraft = { label: shortLocationLabel(r.display_name), lat, lon };
+        input.value = homeDraft.label;
+        hideResults();
+        renderHomePanel();
+        map.flyTo({ center: [lon, lat], zoom: 11, duration: 1000 });
+      });
+      resultsList.appendChild(li);
+    });
+    resultsList.hidden = false;
+  }
+
+  async function runSearch(query) {
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
+    const url =
+      `${NOMINATIM_SEARCH_URL}?format=json&countrycodes=it&limit=5&accept-language=it&q=` +
+      encodeURIComponent(query);
+    try {
+      const resp = await fetch(url, { signal: abortController.signal });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      renderResults(await resp.json());
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        console.error(err);
+        renderResults([]);
+      }
+    }
+  }
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    clearTimeout(debounceTimer);
+    if (q.length < LOCATION_SEARCH_MIN_CHARS) {
+      hideResults();
+      return;
+    }
+    debounceTimer = setTimeout(() => runSearch(q), LOCATION_SEARCH_DEBOUNCE_MS);
+  });
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (q.length < LOCATION_SEARCH_MIN_CHARS) return;
+    clearTimeout(debounceTimer);
+    runSearch(q);
+  });
+  document.addEventListener("click", (e) => {
+    if (!document.getElementById("homeSearch").contains(e.target)) hideResults();
+  });
+
+  if (homeDraft) input.value = homeDraft.label;
+
+  document.getElementById("homeSaveBtn").addEventListener("click", () => {
+    if (!homeDraft || homeSpeciesSelection.size === 0) return;
+    const radiusInput = document.getElementById("homeRadiusInput");
+    const radiusKm = Math.min(MAX_HOME_RADIUS_KM, Math.max(1, Math.round(Number(radiusInput.value) || 20)));
+    radiusInput.value = radiusKm;
+    notifyHome = { label: homeDraft.label, lat: homeDraft.lat, lon: homeDraft.lon, radiusKm, species: [...homeSpeciesSelection] };
+    persistHome();
+    syncHomeTag();
+    renderHomePanel();
+    renderZoneList(); // aggiorna la visibilità del pulsante push condiviso
+
+    const status = document.getElementById("homeStatus");
+    if (!pushIsActive()) {
+      // senza permesso la casa è salvata ma muta: stesso avviso già usato
+      // per le zone, non serve inventarne uno diverso
+      if (isIOS() && !isStandalonePwa()) showIosPushHint();
+      else showPushPrompt("La casa è salvata, ma senza il permesso di notifica non riceverai l'avviso.");
+      status.hidden = true;
+    } else {
+      status.textContent = "Salvato.";
+      status.hidden = false;
+    }
+  });
+
+  document.getElementById("homeRemoveBtn").addEventListener("click", () => {
+    notifyHome = null;
+    homeDraft = null;
+    homeSpeciesSelection.clear();
+    document.querySelectorAll("#homeSpecies .chip").forEach((chip) => {
+      chip.classList.remove("active");
+      chip.querySelector("input").checked = false;
+    });
+    input.value = "";
+    persistHome();
+    syncHomeTag();
+    renderHomePanel();
+    renderZoneList();
+  });
+}
+
 function onMapClick(e) {
   // mentre si disegna una zona il tap fa parte del gesto di disegno
   // (vedi setupRainZone), non deve aprire il popup meteo
@@ -2395,6 +2622,7 @@ updateLegend();
 setupMobileMenus();
 setupLocationSearch();
 setupRainZone();
+setupHomeNotify();
 map.on("click", onMapClick);
 
 // visibilità dei layer e terreno si possono impostare solo a stile

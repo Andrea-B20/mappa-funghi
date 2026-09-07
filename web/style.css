@@ -667,6 +667,12 @@ main {
   z-index: 1000;
   width: 260px;
   max-width: calc(100vw - 2 * var(--sp-4));
+  /* il tab "Vicino a casa" (ricerca + raggio + 4 specie + salva/rimuovi +
+     pulsante push condiviso) è più alto di quanto lo fosse il solo elenco
+     zone: su schermi bassi (telefoni in orizzontale, iPhone SE) trabocca
+     altrimenti sotto il bordo della finestra */
+  max-height: calc(100vh - 2 * var(--sp-4));
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -739,6 +745,124 @@ main {
 .zone-btn-primary:hover { background: var(--accent); color: var(--accent-ink); opacity: 0.9; }
 .zone-enable-push { width: 100%; margin-top: var(--sp-2); }
 #zonePushStatus { margin-top: var(--sp-2); color: var(--dry); }
+
+/* Due modalità nello stesso pannello: "Zone" (esistente) e "Vicino a
+   casa" (nuova). Un piccolo segmented control come .mode-switch in alto
+   nel sito, così il pattern è già familiare a chi lo ha già visto lì. */
+.notify-tabs {
+  display: flex;
+  padding: 3px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  gap: 2px;
+  margin-bottom: var(--sp-3);
+}
+.notify-tab {
+  flex: 1 1 0;
+  height: 30px;
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.notify-tab:hover { color: var(--text); }
+.notify-tab.active { background: var(--accent); color: var(--accent-ink); }
+
+/* ricerca indirizzo per "casa": stessa lista risultati della ricerca
+   località in alto (.location-search-results, riusata di proposito), ma
+   ancorata a questo contenitore invece che a quello nell'header */
+.home-search { position: relative; }
+.home-search-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 var(--sp-3);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: 13px;
+}
+.home-search-input::placeholder { color: var(--text-faint); }
+.home-search-input:focus { outline: none; border-color: var(--border-strong); }
+/* dentro il pannello notifiche (z-index 1000) invece che nell'header: qui
+   1300 basta e avanza, non deve competere con la lista della ricerca
+   principale che vive in tutt'altro contesto di impilamento */
+.home-search .location-search-results { z-index: 1300; right: auto; left: 0; }
+
+.home-form { margin-top: var(--sp-3); }
+
+.home-current {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+}
+.home-current svg { width: 17px; height: 17px; flex: none; color: var(--text-faint); }
+.home-current span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-3);
+  font-size: 13px;
+  color: var(--text);
+}
+.home-radius-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+.home-radius-input input {
+  width: 56px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.home-radius-input input:focus { outline: none; border-color: var(--border-strong); }
+/* le frecce native del browser sono minuscole e imprecise su mobile: il
+   valore si digita, non si trascina di 1 alla volta */
+.home-radius-input input::-webkit-inner-spin-button,
+.home-radius-input input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.home-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin: 0 0 var(--sp-2);
+}
+
+/* checkbox specie: stesso .chip/.dot del filtro in alto (colore reale del
+   cappello), ma impilate invece che in riga — qui lo spazio è verticale e
+   stretto, non orizzontale come nella toolbar */
+.home-species { display: flex; flex-direction: column; gap: 6px; margin-bottom: var(--sp-1); }
+.home-species .chip { width: 100%; justify-content: flex-start; }
+
+#homeStatus { margin-top: var(--sp-2); }
 
 /* istruzioni "aggiungi a Home" su iOS: vero popup modale, a differenza del
    pannello zona qui sopra non deve restare aperto mentre si tocca la

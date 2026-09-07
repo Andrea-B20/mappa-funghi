@@ -534,8 +534,41 @@ function speciesScore(sp, env, rain = null, weights = SCORE_WEIGHTS) {
   );
 }
 
-/* Sotto Node (il backtest) esporta; nel browser questo blocco non esiste e
-   le funzioni restano semplicemente globali come ogni script classico. */
+/* SOGLIE DEGLI ALERT — calibrate col backtest, non scelte a occhio.
+
+   Sono i percentili dei punteggi calcolati SUI RITROVAMENTI VERI, cioè su
+   luoghi e giorni in cui quel fungo è stato davvero raccolto:
+     - "pronto"    = mediana dei ritrovamenti. Metà delle raccolte reali è
+                     avvenuta in condizioni almeno così buone.
+     - "in arrivo" = primo quartile. Sotto questa soglia si sta sotto il 75%
+                     delle raccolte reali.
+   Per confronto, la mediana dei giorni di controllo (stesso posto, stagione
+   diversa) è 0.022: sta ben sotto anche la soglia bassa.
+
+   Vivono qui e non in app.js perché le notifiche "vicino a casa" (vedi
+   scripts/send_notifications.py) girano sotto Node e devono giudicare con
+   la STESSA soglia della mappa: se il backend avesse una sua copia dei
+   numeri, i due potrebbero disallinearsi al primo aggiustamento fatto da
+   una sola parte, ed è esattamente il tipo di errore che questo progetto
+   ha già dovuto correggere due volte (mm del grafico, poi verdetto/badge).
+
+   Vanno rifatte con scripts/backtest_model.py ogni volta che cambiano i
+   pesi o i fattori: sono conseguenze della scala del punteggio, non
+   costanti indipendenti. */
+const READY_THRESHOLD = 0.185;
+const SOON_THRESHOLD = 0.043;
+
+// Lato server serve solo "quanto è alto il livello", non le etichette
+// italiane per la UI (quelle restano in app.js, che le traduce da qui).
+function speciesTier(score) {
+  if (score >= READY_THRESHOLD) return "ready";
+  if (score >= SOON_THRESHOLD) return "soon";
+  return "none";
+}
+
+/* Sotto Node (il backtest, le notifiche) esporta; nel browser questo
+   blocco non esiste e le funzioni restano semplicemente globali come ogni
+   script classico. */
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SPECIES_VEG_AFFINITY,
@@ -564,5 +597,8 @@ if (typeof module !== "undefined" && module.exports) {
     conditionsQuality,
     speciesScore,
     SCORE_WEIGHTS,
+    READY_THRESHOLD,
+    SOON_THRESHOLD,
+    speciesTier,
   };
 }

@@ -64,13 +64,15 @@ jobs:
           done
           exit 1
 
-  # notifiche pioggia sulle zone disegnate dagli utenti (vedi web/app.js):
-  # job separato da update-weather perché non dipende affatto dalla
-  # griglia meteo (interroga Open-Meteo punto per punto per conto suo) —
-  # tenerlo insieme voleva dire aspettare il fetch della griglia, lento e
-  # per nulla necessario, anche solo per un test manuale veloce. Se i
-  # secret OneSignal non sono configurati lo script esce subito senza
-  # fare nulla, quindi il job è sempre sicuro da eseguire
+  # notifiche push (vedi web/app.js): due tipi indipendenti nello stesso
+  # script — zone disegnate a mano (avvisano di pioggia) e "vicino a casa"
+  # (avvisano di prontezza, l'intero modello, in un raggio da un
+  # indirizzo). Job separato da update-weather perché non dipende affatto
+  # dalla griglia meteo (interroga Open-Meteo per conto suo) — tenerlo
+  # insieme voleva dire aspettare il fetch della griglia, lento e per
+  # nulla necessario, anche solo per un test manuale veloce. Se i secret
+  # OneSignal non sono configurati lo script esce subito senza fare nulla,
+  # quindi il job è sempre sicuro da eseguire
   notify-rain:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
@@ -82,17 +84,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # le notifiche calcolano quali funghi la pioggia mette in moto usando
-      # web/model.js, cioè lo stesso modello del sito, eseguito con Node
+      # entrambi i tipi di notifica calcolano i punteggi con web/model.js,
+      # cioè lo stesso modello del sito, eseguito con Node — non una copia
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
       - run: pip install -r requirements.txt
-      - name: Notifiche pioggia
+      - name: Notifiche
         env:
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
-        run: python scripts/send_rain_notifications.py
+        run: python scripts/send_notifications.py
+      # stato "ultimo livello osservato" per le notifiche "vicino a casa"
+      # (vedi HOME_STATE_PATH in scripts/send_notifications.py): non
+      # riguarda le zone, che restano stateless come sempre (la pioggia è
+      # un evento del giorno, non ha bisogno di memoria). NON in web/data:
+      # quella cartella è pubblicata su GitHub Pages e qui dentro finiscono
+      # identificativi di iscrizione.
+      - name: Salva stato notifiche "vicino a casa"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # il file non esiste finché nessuno ha impostato una casa: "git add"
+          # su un percorso assente farebbe fallire lo step, quindi si aggiunge
+          # solo se c'è davvero
+          [ -f data/notify_home_state.json ] && git add data/notify_home_state.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Aggiorna stato notifiche vicino a casa (automatico)"
+          for i in 1 2 3; do
+            git pull --rebase --autostash && git push && exit 0
+            sleep 5
+          done
+          exit 1
 
   update-occurrences:
     if: >-
