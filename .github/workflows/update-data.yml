@@ -26,6 +26,18 @@ on:
 permissions:
   contents: write
 
+# il lunedì i due trigger (04:00 storico, 05:00 meteo) possono sovrapporsi:
+# entrambi girano fetch_soil_ph.py sullo STESSO file (web/data/soil_ph.json),
+# e se le due run sono davvero in parallelo il "git pull --rebase" del
+# retry-loop di commit può trovarci un conflitto vero che non sa risolvere da
+# solo — dopo i 3 tentativi il commit (dati meteo compresi) va perso senza
+# essere mai pushato. In coda anziché in parallelo: chi parte dopo aspetta
+# che l'altra run abbia finito (e pushato) prima di girare, così non c'è mai
+# più di una run a scrivere sul branch alla volta
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
 jobs:
   update-weather:
     if: >-
