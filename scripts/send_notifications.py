@@ -89,8 +89,9 @@ MIN_MM_TO_NOTIFY = 3.0
 # giorno di funghi implica comunque uno spostamento, non un raggio
 # potenzialmente più largo dell'Italia): il valore che l'utente ha scelto
 # sul sito viene comunque tagliato qui, lato server, non ci si fida del
-# solo controllo client.
-MAX_RADIUS_KM = 80
+# solo controllo client. Deve restare uguale a MAX_HOME_RADIUS_KM in
+# web/app.js.
+MAX_RADIUS_KM = 100
 
 # Campionamento a tre anelli concentrici — 19 punti SEMPRE, indipendenti dal
 # raggio scelto: il costo per utente resta costante (una sola chiamata

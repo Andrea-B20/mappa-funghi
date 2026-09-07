@@ -1912,7 +1912,7 @@ const NOTIFY_HOME_KEY = "mappaFunghi.notifyHome";
 // restare uguale al tetto lato server (MAX_RADIUS_KM in
 // scripts/send_notifications.py) — il client taglia qui solo per dare un
 // feedback immediato, il server non si fida comunque del valore ricevuto
-const MAX_HOME_RADIUS_KM = 80;
+const MAX_HOME_RADIUS_KM = 100;
 
 let notifyHome = null;
 try {
@@ -2279,6 +2279,9 @@ function setupRainZone() {
   btn.addEventListener("click", () => {
     panel.hidden = false;
     renderZoneList();
+    // se l'ultima volta era rimasta aperta la scheda "vicino a casa", il
+    // cerchio deve ricomparire insieme al pannello, non solo cambiando tab
+    updateHomeRadiusPreview();
   });
 
   closeBtn.addEventListener("click", () => {
@@ -2286,6 +2289,7 @@ function setupRainZone() {
     // chiude: invertendo l'ordine il pannello tornerebbe visibile
     if (drawingZone) stopDrawing();
     panel.hidden = true;
+    updateHomeRadiusPreview();
   });
 
   drawBtn.addEventListener("click", startDrawing);
@@ -2401,6 +2405,63 @@ function updateHomeSaveEnabled() {
   document.getElementById("homeSaveBtn").disabled = !homeDraft || homeSpeciesSelection.size === 0;
 }
 
+// Cerchio geografico approssimato come poligono a 64 lati: stessa
+// proiezione equirettangolare già usata altrove nel progetto (vedi
+// ring_points in scripts/send_notifications.py, di cui questo è
+// l'equivalente lato client) — non la distanza esatta su un ellissoide,
+// ma l'errore su un raggio di decine di km è invisibile alla scala di
+// questa mappa.
+function circlePolygonCoords(lat, lon, radiusKm, steps = 64) {
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const angle = (2 * Math.PI * i) / steps;
+    const dLat = ((radiusKm * 1000) / 111320) * Math.cos(angle);
+    const dLon = ((radiusKm * 1000) / (111320 * Math.cos((lat * Math.PI) / 180))) * Math.sin(angle);
+    coords.push([lon + dLon, lat + dLat]);
+  }
+  return coords;
+}
+
+// Il raggio digitato ora, non ancora salvato: letto ogni volta dal campo
+// invece che da notifyHome, perché deve muoversi mentre si scrive, non
+// solo dopo aver premuto "Salva" — è la richiesta esplicita di poter
+// "capire quanto la ricerca copre" prima di confermare.
+function currentHomeRadiusKm() {
+  const input = document.getElementById("homeRadiusInput");
+  const value = Math.round(Number(input.value));
+  return Number.isFinite(value) && value > 0 ? Math.min(MAX_HOME_RADIUS_KM, value) : null;
+}
+
+// Disegna il cerchio SOLO mentre la sezione "vicino a casa" è davvero
+// visibile (pannello aperto, quella scheda attiva) e un indirizzo è stato
+// scelto: fuori da lì sparisce, non è un segno permanente sulla mappa ma
+// un ausilio per definire la ricerca. Ricalcolata da zero a ogni chiamata
+// invece di fare toggle manuali sparsi nei vari handler, così ogni punto
+// che cambia lo stato coinvolto (tab, apertura/chiusura pannello,
+// indirizzo, raggio) può limitarsi a richiamarla senza dover sapere cosa
+// mostrare o nascondere.
+function updateHomeRadiusPreview() {
+  const source = map.getSource && map.getSource("homeRadiusPreview");
+  if (!source) return;
+  const panel = document.getElementById("zonePanel");
+  const panelHome = document.getElementById("notifyPanelHome");
+  const radiusKm = homeDraft && !panel.hidden && !panelHome.hidden ? currentHomeRadiusKm() : null;
+  if (!radiusKm) {
+    source.setData({ type: "FeatureCollection", features: [] });
+    return;
+  }
+  source.setData({
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Polygon", coordinates: [circlePolygonCoords(homeDraft.lat, homeDraft.lon, radiusKm)] },
+      },
+    ],
+  });
+}
+
 // Riflette lo stato (homeDraft/notifyHome) sul DOM: chiamata dopo ogni
 // scelta di un indirizzo, dopo il salvataggio e dopo la rimozione, così il
 // pannello non può disallinearsi da cosa è realmente impostato.
@@ -2417,6 +2478,7 @@ function renderHomePanel() {
   }
   removeBtn.hidden = !notifyHome;
   updateHomeSaveEnabled();
+  updateHomeRadiusPreview();
 }
 
 function setupHomeNotify() {
@@ -2435,6 +2497,7 @@ function setupHomeNotify() {
     tabHome.setAttribute("aria-selected", String(!zones));
     panelZones.hidden = !zones;
     panelHome.hidden = zones;
+    updateHomeRadiusPreview();
   };
   tabZones.addEventListener("click", () => selectTab(true));
   tabHome.addEventListener("click", () => selectTab(false));
@@ -2469,8 +2532,21 @@ function setupHomeNotify() {
         homeDraft = { label: shortLocationLabel(r.display_name), lat, lon };
         input.value = homeDraft.label;
         hideResults();
+        // renderHomePanel() PRIMA di inquadrare: porta con sé il raggio
+        // giusto nel campo (quello già salvato se si sta modificando una
+        // casa esistente, altrimenti il valore di default), e il
+        // riquadro deve inquadrare QUEL cerchio, non uno a caso
         renderHomePanel();
-        map.flyTo({ center: [lon, lat], zoom: 11, duration: 1000 });
+        const radiusKm = currentHomeRadiusKm() || 20;
+        const dLat = (radiusKm * 1000) / 111320;
+        const dLon = (radiusKm * 1000) / (111320 * Math.cos((lat * Math.PI) / 180));
+        map.fitBounds(
+          [
+            [lon - dLon, lat - dLat],
+            [lon + dLon, lat + dLat],
+          ],
+          { padding: 48, duration: 1000, maxZoom: 13 }
+        );
       });
       resultsList.appendChild(li);
     });
@@ -2517,6 +2593,11 @@ function setupHomeNotify() {
 
   if (homeDraft) input.value = homeDraft.label;
 
+  // il cerchio segue il raggio MENTRE si digita, non solo dopo "Salva": è
+  // il punto centrale della richiesta ("capire quanto la ricerca copre"
+  // prima di confermarlo)
+  document.getElementById("homeRadiusInput").addEventListener("input", updateHomeRadiusPreview);
+
   document.getElementById("homeSaveBtn").addEventListener("click", () => {
     if (!homeDraft || homeSpeciesSelection.size === 0) return;
     const radiusInput = document.getElementById("homeRadiusInput");
@@ -2525,7 +2606,7 @@ function setupHomeNotify() {
     notifyHome = { label: homeDraft.label, lat: homeDraft.lat, lon: homeDraft.lon, radiusKm, species: [...homeSpeciesSelection] };
     persistHome();
     syncHomeTag();
-    renderHomePanel();
+    renderHomePanel(); // ridisegna anche il cerchio con il raggio (eventualmente troncato al tetto)
     renderZoneList(); // aggiorna la visibilità del pulsante push condiviso
 
     const status = document.getElementById("homeStatus");
@@ -2643,7 +2724,19 @@ map.on("load", () => {
     source: "zoneDrawPreview",
     paint: { "line-color": "#6fa8dc", "line-width": 2, "line-dasharray": [2, 2] },
   });
+  // anteprima del raggio "vicino a casa": stesso stile tratteggiato del
+  // disegno zona ancora in corso, perché comunica la stessa cosa — "non è
+  // ancora una notifica attiva, è quello che stai definendo adesso"
+  map.addSource("homeRadiusPreview", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "homeRadiusPreviewFill", type: "fill", source: "homeRadiusPreview", paint: { "fill-color": "#6fa8dc", "fill-opacity": 0.08 } });
+  map.addLayer({
+    id: "homeRadiusPreviewLine",
+    type: "line",
+    source: "homeRadiusPreview",
+    paint: { "line-color": "#6fa8dc", "line-width": 2, "line-dasharray": [2, 2] },
+  });
   renderZonesSource();
+  updateHomeRadiusPreview();
 });
 
 Promise.all([

@@ -786,10 +786,21 @@ main {
 }
 .home-search-input::placeholder { color: var(--text-faint); }
 .home-search-input:focus { outline: none; border-color: var(--border-strong); }
-/* dentro il pannello notifiche (z-index 1000) invece che nell'header: qui
-   1300 basta e avanza, non deve competere con la lista della ricerca
-   principale che vive in tutt'altro contesto di impilamento */
-.home-search .location-search-results { z-index: 1300; right: auto; left: 0; }
+/* NON in overlay (a differenza della ricerca principale in alto): quella
+   flotta sopra la mappa, che ha spazio libero sotto; questa sta dentro un
+   pannello con altezza limitata e scroll proprio (.zone-panel), e un
+   overlay lì dentro restava fuori dall'area visibile — bisognava scorrere
+   "alla cieca" per trovare i risultati. In flusso normale, i risultati
+   spingono giù il resto del pannello (che scrolla) invece di sovrapporsi:
+   compaiono subito sotto il campo dove si sta già guardando. */
+.home-search .location-search-results {
+  position: static;
+  width: auto;
+  min-width: 0;
+  max-height: 180px;
+  margin: 6px 0 0;
+  box-shadow: none;
+}
 
 .home-form { margin-top: var(--sp-3); }
 
@@ -820,6 +831,7 @@ main {
   font-size: 13px;
   color: var(--text);
 }
+.home-field small { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; color: var(--text-faint); }
 .home-radius-input {
   display: flex;
   align-items: center;
