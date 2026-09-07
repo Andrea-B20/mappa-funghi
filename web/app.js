@@ -1184,6 +1184,20 @@ function shortLocationLabel(displayName) {
   return displayName.split(",").slice(0, 3).join(",").trim();
 }
 
+// Nominatim a volte restituisce più risultati per lo stesso luogo (es. un
+// nodo punto e un poligono di confine con lo stesso centro): dopo il
+// troncamento di shortLocationLabel finiscono per avere lo stesso testo in
+// lista. Teniamo solo il primo (il più rilevante, dato l'ordine di Nominatim).
+function dedupeLocationResults(results) {
+  const seen = new Set();
+  return results.filter((r) => {
+    const key = shortLocationLabel(r.display_name);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function setupLocationSearch() {
   const container = document.getElementById("locationSearch");
   const toolbarEl = document.getElementById("toolbar");
@@ -1229,6 +1243,7 @@ function setupLocationSearch() {
 
   function renderResults(results) {
     resultsList.innerHTML = "";
+    results = dedupeLocationResults(results);
     if (!results.length) {
       hideResults();
       return;
@@ -2517,6 +2532,7 @@ function setupHomeNotify() {
 
   function renderResults(results) {
     resultsList.innerHTML = "";
+    results = dedupeLocationResults(results);
     if (!results.length) {
       hideResults();
       return;
