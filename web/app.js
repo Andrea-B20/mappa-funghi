@@ -1236,7 +1236,13 @@ function setupLocationSearch() {
     toolbarEl.classList.add("search-open");
     toggle.setAttribute("aria-expanded", "true");
     toggle.setAttribute("aria-label", "Chiudi ricerca");
-    input.focus();
+    // il focus va dato SOLO a slide finito (0.32s, vedi .location-search-form):
+    // dandolo subito, mentre il campo è ancora largo 0 e traslato fuori
+    // schermo, il browser mobile calcola su quella geometria sbagliata lo
+    // zoom/pan automatico per portare in vista l'input focalizzato, e il
+    // risultato è tutto il viewport che scatta in modo innaturale proprio
+    // mentre la barra sta scorrendo in vista
+    setTimeout(() => input.focus(), 340);
   };
   toggle.addEventListener("click", () => {
     if (container.classList.contains("open")) closeSearch();
