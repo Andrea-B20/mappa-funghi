@@ -1181,7 +1181,16 @@ const LOCATION_SEARCH_MIN_CHARS = 3;
 const LOCATION_SEARCH_DEBOUNCE_MS = 400;
 
 function shortLocationLabel(displayName) {
-  return displayName.split(",").slice(0, 3).join(",").trim();
+  // Scartiamo i segmenti puramente numerici (CAP): Nominatim li inserisce
+  // solo per alcuni risultati (es. il comune ma non l'omonima provincia,
+  // frequente in Trentino-Alto Adige come Bolzano/Trento), quindi tenendoli
+  // il troncamento a 3 parti mostra un CAP invece della regione o del paese
+  // e due risultati dello stesso luogo finiscono con etichette diverse.
+  const parts = displayName
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p && !/^\d+$/.test(p));
+  return parts.slice(0, 3).join(", ");
 }
 
 // Nominatim a volte restituisce più risultati per lo stesso luogo (es. un
