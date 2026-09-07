@@ -1924,6 +1924,12 @@ window.hideRainTip = function () {
 // spostare il box: bisogna scegliere il lato giusto (l'anchor) in base allo
 // spazio reale disponibile intorno al click, così il box cresce dal lato
 // libero invece di finire sotto agli overlay.
+//
+// Sopra/sotto non basta sempre: premendo un punto vicino al bordo
+// inferiore (poco sopra la legenda) può non esserci spazio sufficiente né
+// sotto né sopra per un popup alto (tante specie tracciate), e forzarlo
+// comunque in verticale lo faceva finire tagliato a metà. In quel caso si
+// apre invece di lato (sinistra/destra), dove di solito lo spazio non manca.
 function updatePopupAnchor(popup) {
   // su smartphone il popup è fisso sullo schermo e la freccia è nascosta
   // (vedi .wx-map-popup in CSS): non serve calcolare nulla
@@ -1951,22 +1957,39 @@ function updatePopupAnchor(popup) {
     // entra da un solo lato si usa quello, altrimenti quello con più spazio
     const spaceAbove = pos.y - topLimit;
     const spaceBelow = bottomLimit - pos.y;
+    const spaceLeft = pos.x - leftLimit;
+    const spaceRight = rightLimit - pos.x;
     const fitsBelow = rect.height <= spaceBelow;
     const fitsAbove = rect.height <= spaceAbove;
-    let vertical;
-    if (fitsBelow && !fitsAbove) vertical = "top";
-    else if (fitsAbove && !fitsBelow) vertical = "bottom";
-    else vertical = spaceBelow >= spaceAbove ? "top" : "bottom";
 
-    // orizzontale: di norma il box resta centrato sul click; solo se così
-    // finirebbe fuori dal bordo sinistro/destro si ancora quel lato al
-    // click e lo si fa crescere verso l'altro
-    const halfWidth = rect.width / 2;
-    let horizontal = "";
-    if (pos.x - halfWidth < leftLimit) horizontal = "left";
-    else if (pos.x + halfWidth > rightLimit) horizontal = "right";
+    let anchor;
+    if (fitsBelow || fitsAbove || !(rect.width <= spaceLeft || rect.width <= spaceRight)) {
+      // caso normale: il popup entra sopra o sotto al click (o comunque non
+      // ha alternative migliori aprendosi di lato)
+      const vertical = fitsBelow && !fitsAbove ? "top" : fitsAbove && !fitsBelow ? "bottom" : (spaceBelow >= spaceAbove ? "top" : "bottom");
 
-    const anchor = horizontal ? `${vertical}-${horizontal}` : vertical;
+      // orizzontale: di norma il box resta centrato sul click; solo se così
+      // finirebbe fuori dal bordo sinistro/destro si ancora quel lato al
+      // click e lo si fa crescere verso l'altro
+      const halfWidth = rect.width / 2;
+      let horizontal = "";
+      if (pos.x - halfWidth < leftLimit) horizontal = "left";
+      else if (pos.x + halfWidth > rightLimit) horizontal = "right";
+
+      anchor = horizontal ? `${vertical}-${horizontal}` : vertical;
+    } else {
+      // il popup è troppo alto per stare per intero sia sopra sia sotto al
+      // click (tipico premendo un punto vicino al bordo inferiore, appena
+      // sopra la legenda: sotto non c'è spazio e il popup è più alto dello
+      // spazio libero anche sopra), ma di lato normalmente sì: si apre in
+      // orizzontale invece di restare comunque incollato in verticale e
+      // finire tagliato/mezzo nascosto sotto la legenda o dietro l'header
+      const fitsRight = rect.width <= spaceRight; // cresce a destra -> anchor "left"
+      const fitsLeft = rect.width <= spaceLeft; // cresce a sinistra -> anchor "right"
+      if (fitsRight && !fitsLeft) anchor = "left";
+      else if (fitsLeft && !fitsRight) anchor = "right";
+      else anchor = spaceRight >= spaceLeft ? "left" : "right";
+    }
     if (popup.options.anchor !== anchor) {
       popup.options.anchor = anchor;
       // forza MapLibre a ricalcolare posizione/classi CSS con il nuovo
