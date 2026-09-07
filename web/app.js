@@ -1904,12 +1904,22 @@ window.hideRainTip = function () {
 // Header (in alto) e legenda (in basso, su mobile a tutta larghezza) sono
 // overlay fissi sopra la mappa: il motore non sa che coprono parte del suo
 // container, e i popup di MapLibre non hanno un auto-pan proprio. Dopo
-// l'apertura misuriamo dove è finito davvero il popup e spostiamo la mappa
-// quel tanto che basta perché non resti dietro a quegli elementi.
+// l'apertura misuriamo dove è finito davvero il popup e lo spostiamo quel
+// tanto che basta perché non resti dietro a quegli elementi.
+//
+// Prima si usava map.panBy(): sposta la MAPPA di N pixel, e N pixel
+// corrispondono a una distanza geografica che dipende dallo zoom. Alla
+// vista iniziale (zoom 5, tutta Italia) un aggiustamento di appena
+// ~120px — nulla di che a uno zoom cittadino — spostava il centro mappa
+// di ~2° di latitudine, cioè centinaia di km: il popup restava al posto
+// giusto sullo schermo, ma tutto il resto (l'intera heatmap) scattava
+// vistosamente sotto di esso. Da qui il "lo schermo fa un movimento
+// strano" segnalato. popup.setOffset() invece sposta SOLO il popup, in
+// pixel schermo, senza toccare la mappa sottostante: stessa correzione
+// visiva, zero movimento del mondo qualunque sia lo zoom.
 function nudgePopupIntoView(popup) {
   // su smartphone il popup è fisso sullo schermo (vedi .wx-map-popup in
-  // CSS): spostare la mappa qui non serve più e la farebbe solo scorrere
-  // a vuoto sotto un popup che non si muove
+  // CSS): spostarlo qui non serve più
   if (window.matchMedia("(max-width: 720px), (max-height: 480px)").matches) return;
   requestAnimationFrame(() => {
     const el = popup.getElement();
@@ -1926,19 +1936,26 @@ function nudgePopupIntoView(popup) {
       ? legend.getBoundingClientRect().top - margin
       : window.innerHeight - margin;
 
-    // panBy sposta la mappa: il contenuto (popup compreso) si muove del
-    // valore opposto, quindi lo scarto va passato con questo segno
-    let dy = 0;
-    if (rect.top < topLimit) dy = rect.top - topLimit;
-    else if (rect.bottom > bottomLimit) dy = Math.min(rect.bottom - bottomLimit, rect.top - topLimit);
+    // di quanto deve spostarsi IL POPUP sullo schermo (segno screen-space:
+    // positivo = giù/destra), non più "di quanto va panata la mappa"
+    let shiftY = 0;
+    if (rect.top < topLimit) shiftY = topLimit - rect.top;
+    else if (rect.bottom > bottomLimit) shiftY = -Math.min(rect.bottom - bottomLimit, rect.top - topLimit);
 
-    let dx = 0;
-    if (rect.left < margin) dx = rect.left - margin;
+    let shiftX = 0;
+    if (rect.left < margin) shiftX = margin - rect.left;
     else if (rect.right > window.innerWidth - margin) {
-      dx = Math.min(rect.right - (window.innerWidth - margin), rect.left - margin);
+      shiftX = -Math.min(rect.right - (window.innerWidth - margin), rect.left - margin);
     }
 
-    if (dx || dy) map.panBy([dx, dy], { duration: 300 });
+    if (shiftX || shiftY) {
+      // cumulativo: una seconda chiamata (dopo che il contenuto cresce
+      // caricando i dati) corregge ULTERIORMENTE rispetto a un eventuale
+      // offset già applicato dalla prima, non lo sovrascrive
+      popup._wxOffsetX = (popup._wxOffsetX || 0) + shiftX;
+      popup._wxOffsetY = (popup._wxOffsetY || 0) + shiftY;
+      popup.setOffset([popup._wxOffsetX, popup._wxOffsetY]);
+    }
   });
 }
 
