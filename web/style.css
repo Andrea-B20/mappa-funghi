@@ -478,16 +478,31 @@ main {
   border: 1px solid var(--border-strong) !important;
   padding: 0 !important;
 }
-/* la freccia è un triangolo CSS fatto di bordi: quella sopra/sotto usa
-   border-top/bottom-color, quella laterale (popup apribile anche a
-   sinistra/destra, vedi updatePopupAnchor in app.js) border-left/right-color
-   — vanno colorate entrambe le coppie o la freccia laterale resta del
-   colore di default invece che dello sfondo del popup */
-.maplibregl-popup-tip {
-  border-top-color: var(--surface) !important;
+/* la freccia è un triangolo CSS: un quadratino con TUTTI i bordi
+   trasparenti (regola base di MapLibre), di cui viene colorato SOLO il
+   lato rivolto verso il click — gli altri devono restare trasparenti,
+   altrimenti il quadratino si vede per intero invece di un triangolo
+   (successo colorando indiscriminatamente tutti e 4 i lati: risultato un
+   rettangolo pieno). Quale lato colorare dipende dall'anchor scelto in
+   updatePopupAnchor (app.js): sopra/sopra-lato usa border-bottom-color,
+   sotto/sotto-lato border-top-color, sinistra border-right-color, destra
+   border-left-color — bisogna quindi mirare selettore per selettore
+   invece di un'unica regola su .maplibregl-popup-tip */
+.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
   border-bottom-color: var(--surface) !important;
-  border-left-color: var(--surface) !important;
+}
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: var(--surface) !important;
+}
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
   border-right-color: var(--surface) !important;
+}
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--surface) !important;
 }
 .maplibregl-popup-close-button {
   color: var(--text-faint) !important;
