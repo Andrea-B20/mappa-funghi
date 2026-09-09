@@ -628,6 +628,20 @@ map.touchZoomRotate.enable();
 // due dita che ruotano una rispetto all'altra = rotazione della mappa
 map.touchZoomRotate.enableRotation();
 
+// su schermo touch, toccare due punti diversi in rapida successione per
+// vedere due popup meteo distinti viene talvolta letto da MapLibre come
+// il doppio tap che zooma (gesto nativo "doppio tap = zoom in"): capita
+// per sbaglio, e su telefono è scomodo tornare indietro con lo zoom. Lo
+// zoom resta comunque disponibile con i pulsanti +/- e col pizzico a due
+// dita (touchZoomRotate, lasciato attivo sopra): qui si disattiva solo il
+// doppio tap, il solo gesto che scatta per errore toccando punti diversi.
+// Il mouse non ha questo problema (un doppio click è sempre deliberato),
+// quindi su desktop resta attivo.
+function isCoarsePointer() {
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+if (isCoarsePointer()) map.doubleClickZoom.disable();
+
 let mapStyleReady = false;
 
 const MAP_TYPE_STORAGE_KEY = "mappaFunghi.mapType";
@@ -2581,7 +2595,10 @@ function setupRainZone() {
     map.dragPan.enable();
     map.dragRotate.enable();
     map.touchZoomRotate.enable();
-    map.doubleClickZoom.enable();
+    // il doppio tap resta disattivato su touch anche dopo il disegno: non
+    // va riattivato incondizionatamente, altrimenti si perde la correzione
+    // fatta all'avvio della mappa (vedi isCoarsePointer più sopra)
+    if (!isCoarsePointer()) map.doubleClickZoom.enable();
     map.scrollZoom.enable();
     map.getCanvas().style.cursor = "";
     drawHint.hidden = true;
