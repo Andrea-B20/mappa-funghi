@@ -2143,27 +2143,6 @@ function updatePopupAnchor(popup) {
       // (la posizione impostata è la stessa già attiva)
       popup.setLngLat(popup.getLngLat());
     }
-
-    // La scelta dell'anchor sceglie il lato con PIÙ spazio, ma non garantisce
-    // che quello spazio basti per un popup molto alto (tante specie
-    // tracciate): la freccia resta comunque ancorata al punto cliccato, ma
-    // se il contenuto sfora lo spazio libero in quella direzione finirebbe
-    // fuori schermo lo stesso. Si limita quindi l'altezza massima allo
-    // spazio REALMENTE disponibile per l'anchor scelto (sopra/sotto/centrato)
-    // e si lascia scorrere internamente il resto: il popup resta sempre per
-    // intero dentro la finestra, al costo di uno scroll interno nei casi
-    // estremi invece di finire tagliato fuori dai limiti dello schermo.
-    const wxPopupEl = el.querySelector(".wx-popup");
-    if (wxPopupEl) {
-      const vComponent = anchor.startsWith("top") ? "top" : anchor.startsWith("bottom") ? "bottom" : "";
-      const availableHeight =
-        vComponent === "top" ? spaceBelow : vComponent === "bottom" ? spaceAbove : 2 * Math.min(spaceAbove, spaceBelow);
-      // "chrome" = tutto ciò che nel popup NON è l'area scorrevole (freccia,
-      // bordo, ombra): va sottratto perché availableHeight è lo spazio per
-      // l'INTERO popup, non solo per .wx-popup
-      const chrome = rect.height - wxPopupEl.getBoundingClientRect().height;
-      wxPopupEl.style.maxHeight = Math.max(120, availableHeight - chrome) + "px";
-    }
   });
 }
 
