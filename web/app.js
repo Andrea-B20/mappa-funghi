@@ -2051,16 +2051,26 @@ function updatePopupAnchor(popup) {
     if (!rect.width || !rect.height) return;
 
     const pos = map.project(popup.getLngLat());
-    const header = document.querySelector(".topbar");
+    // map.project restituisce pixel relativi al CONTENITORE della mappa, non
+    // alla pagina: qui l'header ha più righe (titolo, tab, filtri specie) e
+    // la mappa comincia parecchio più in basso della pagina (non è un
+    // overlay, l'header la spinge giù). Confrontare pos con limiti presi
+    // dalla pagina (come window.innerHeight o il bordo di elementi fuori
+    // dal contenitore) falsava lo spazio libero calcolato esattamente di
+    // quell'offset. Il contenitore comincia già subito dopo l'ultima riga
+    // dell'header (nessuna sovrapposizione), quindi il suo bordo
+    // superiore/sinistro è già "appena sotto/accanto all'header": basta il
+    // margine, senza dover misurare l'header a parte.
+    const containerRect = map.getContainer().getBoundingClientRect();
     const legend = document.getElementById("legend");
     const margin = 12;
-    const topLimit = (header ? header.getBoundingClientRect().bottom : 0) + margin;
+    const topLimit = margin;
     const legendVisible = legend && getComputedStyle(legend).display !== "none";
     const bottomLimit = legendVisible
-      ? legend.getBoundingClientRect().top - margin
-      : window.innerHeight - margin;
+      ? legend.getBoundingClientRect().top - containerRect.top - margin
+      : containerRect.height - margin;
     const leftLimit = margin;
-    const rightLimit = window.innerWidth - margin;
+    const rightLimit = containerRect.width - margin;
 
     // verticale: "top" = freccia sopra, box che cresce verso il basso (va
     // bene se c'è spazio SOTTO al click); "bottom" = il contrario. Se
@@ -2096,9 +2106,20 @@ function updatePopupAnchor(popup) {
       // finire tagliato/mezzo nascosto sotto la legenda o dietro l'header
       const fitsRight = rect.width <= spaceRight; // cresce a destra -> anchor "left"
       const fitsLeft = rect.width <= spaceLeft; // cresce a sinistra -> anchor "right"
-      if (fitsRight && !fitsLeft) anchor = "left";
-      else if (fitsLeft && !fitsRight) anchor = "right";
-      else anchor = spaceRight >= spaceLeft ? "left" : "right";
+      const horizontal = fitsRight && !fitsLeft ? "left" : fitsLeft && !fitsRight ? "right" : spaceRight >= spaceLeft ? "left" : "right";
+
+      // "left"/"right" puri centrano il popup verticalmente sul click: se il
+      // punto è vicino al bordo superiore/inferiore anche solo la METÀ
+      // dell'altezza può non entrare, e il popup sforerebbe comunque sopra
+      // l'header o sotto la legenda. In quel caso si aggancia l'angolo
+      // (es. "top-left") così la freccia resta sull'angolo verso il click
+      // ma il popup cresce dalla parte dove lo spazio c'è davvero
+      const halfHeight = rect.height / 2;
+      let vertical = "";
+      if (pos.y - halfHeight < topLimit) vertical = "top";
+      else if (pos.y + halfHeight > bottomLimit) vertical = "bottom";
+
+      anchor = vertical ? `${vertical}-${horizontal}` : horizontal;
     }
     if (popup.options.anchor !== anchor) {
       popup.options.anchor = anchor;
@@ -2107,6 +2128,27 @@ function updatePopupAnchor(popup) {
       // aggiornamento usato per il pan della mappa, senza spostare nulla
       // (la posizione impostata è la stessa già attiva)
       popup.setLngLat(popup.getLngLat());
+    }
+
+    // La scelta dell'anchor sceglie il lato con PIÙ spazio, ma non garantisce
+    // che quello spazio basti per un popup molto alto (tante specie
+    // tracciate): la freccia resta comunque ancorata al punto cliccato, ma
+    // se il contenuto sfora lo spazio libero in quella direzione finirebbe
+    // fuori schermo lo stesso. Si limita quindi l'altezza massima allo
+    // spazio REALMENTE disponibile per l'anchor scelto (sopra/sotto/centrato)
+    // e si lascia scorrere internamente il resto: il popup resta sempre per
+    // intero dentro la finestra, al costo di uno scroll interno nei casi
+    // estremi invece di finire tagliato fuori dai limiti dello schermo.
+    const wxPopupEl = el.querySelector(".wx-popup");
+    if (wxPopupEl) {
+      const vComponent = anchor.startsWith("top") ? "top" : anchor.startsWith("bottom") ? "bottom" : "";
+      const availableHeight =
+        vComponent === "top" ? spaceBelow : vComponent === "bottom" ? spaceAbove : 2 * Math.min(spaceAbove, spaceBelow);
+      // "chrome" = tutto ciò che nel popup NON è l'area scorrevole (freccia,
+      // bordo, ombra): va sottratto perché availableHeight è lo spazio per
+      // l'INTERO popup, non solo per .wx-popup
+      const chrome = rect.height - wxPopupEl.getBoundingClientRect().height;
+      wxPopupEl.style.maxHeight = Math.max(120, availableHeight - chrome) + "px";
     }
   });
 }
