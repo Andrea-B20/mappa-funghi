@@ -714,28 +714,54 @@ main {
 .zone-panel-hint { font-size: 12.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: var(--sp-2); }
 
 /* elenco delle zone salvate: ognuna col proprio pulsante elimina, non un
-   pulsante unico globale — più zone possono coesistere */
+   pulsante unico globale — più zone possono coesistere. Nome e colore sono
+   campi modificabili (non testo statico): servono a riconoscere ed
+   eliminare la zona giusta quando ce ne sono diverse sulla mappa */
 .zone-list { display: flex; flex-direction: column; gap: 6px; }
 .zone-list:empty { display: none; }
 .zone-list-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sp-2);
-  padding: 8px 8px 8px 12px;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
   background: var(--canvas);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.zone-list-name { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 8px; }
-.zone-list-name::before {
-  content: "";
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--wet);
+
+/* selettore colore nativo, ridotto a un pallino cliccabile: le regole
+   -webkit/-moz tolgono il riquadro grigio di default del controllo e
+   arrotondano lo "swatch" interno, l'unica parte che resta visibile */
+.zone-list-color {
+  width: 20px;
+  height: 20px;
   flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
 }
+.zone-list-color::-webkit-color-swatch-wrapper { padding: 0; }
+.zone-list-color::-webkit-color-swatch { border: 1px solid var(--border-strong); border-radius: 50%; }
+.zone-list-color::-moz-color-swatch { border: 1px solid var(--border-strong); border-radius: 50%; }
+
+.zone-list-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 5px 6px;
+}
+.zone-list-name:hover { background: var(--surface-2); }
+.zone-list-name:focus { background: var(--surface-2); border-color: var(--border-strong); outline: none; }
 .zone-list-remove {
   width: 30px;
   height: 30px;

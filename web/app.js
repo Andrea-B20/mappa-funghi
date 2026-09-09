@@ -2216,12 +2216,32 @@ const NOTIFY_ZONES_KEY = "mappaFunghi.notifyZones";
 const PUSH_ENABLED_KEY = "mappaFunghi.pushEnabled";
 const IOS_HINT_SHOWN_KEY = "mappaFunghi.iosHintShown";
 
-// ogni zona è {id, points:[[lng,lat], ...]} — un poligono disegnato a
-// mano libera, non più un cerchio: la forma reale che l'utente traccia
-// può seguire un crinale, una vallata, i confini di un bosco
+// tavolozza di colori ben distinguibili fra loro (e dai colori usati per
+// le specie e per la heatmap) assegnata a rotazione alle nuove zone, così
+// che due zone non si confondano a colpo d'occhio già prima di
+// personalizzarle; l'utente può comunque cambiarli liberamente
+const NOTIFY_ZONE_COLORS = ["#6fa8dc", "#e07a5f", "#c65999", "#8b7cf6", "#4fb0a5", "#e0c341", "#d64550", "#a3a3a3"];
+
+function nextZoneColor() {
+  return NOTIFY_ZONE_COLORS[notifyZones.length % NOTIFY_ZONE_COLORS.length];
+}
+
+// ogni zona è {id, points:[[lng,lat], ...], name, color} — un poligono
+// disegnato a mano libera, non più un cerchio: la forma reale che l'utente
+// traccia può seguire un crinale, una vallata, i confini di un bosco.
+// name/color sono personalizzabili (vedi renderZoneList) per riconoscere
+// ed eliminare la zona giusta quando ce ne sono diverse sulla mappa
 let notifyZones = [];
 try {
-  notifyZones = JSON.parse(localStorage.getItem(NOTIFY_ZONES_KEY) || "[]");
+  const saved = JSON.parse(localStorage.getItem(NOTIFY_ZONES_KEY) || "[]");
+  // le zone salvate prima dell'introduzione di nome/colore non li hanno:
+  // gli assegniamo qui in base alla posizione, una tantum, così restano
+  // gli stessi a ogni ricarica invece di cambiare a ogni render
+  notifyZones = saved.map((z, i) => ({
+    name: `Zona ${i + 1}`,
+    color: NOTIFY_ZONE_COLORS[i % NOTIFY_ZONE_COLORS.length],
+    ...z,
+  }));
 } catch {
   notifyZones = [];
 }
@@ -2393,12 +2413,12 @@ function requestPushPermission(onResult) {
   });
 }
 
-function pointsToPolygonFeature(points, id) {
+function pointsToPolygonFeature(points, id, color) {
   const ring = points.slice();
   const [flng, flat] = ring[0];
   const [llng, llat] = ring[ring.length - 1];
   if (flng !== llng || flat !== llat) ring.push(ring[0]);
-  return { type: "Feature", properties: { id }, geometry: { type: "Polygon", coordinates: [ring] } };
+  return { type: "Feature", properties: { id, color }, geometry: { type: "Polygon", coordinates: [ring] } };
 }
 
 function renderZonesSource() {
@@ -2406,7 +2426,7 @@ function renderZonesSource() {
   if (!source) return;
   source.setData({
     type: "FeatureCollection",
-    features: notifyZones.map((z) => pointsToPolygonFeature(z.points, z.id)),
+    features: notifyZones.map((z) => pointsToPolygonFeature(z.points, z.id, z.color)),
   });
 }
 
@@ -2464,23 +2484,56 @@ const ZONE_TRASH_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M5 7h14M10 7V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2M7 7l1 12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2l1-12"/></svg>';
 
+// Nome e colore si modificano sui campi già in lista, senza ridisegnare
+// l'elenco a ogni tasto premuto o a ogni trascinamento del selettore
+// colore: un renderZoneList() in quel momento cancellerebbe l'input e gli
+// farebbe perdere il focus/il cursore mentre l'utente sta ancora scrivendo
+// o scegliendo il colore. Si ridisegna solo alla creazione/rimozione di
+// una zona, quando la struttura della lista cambia davvero.
 function renderZoneList() {
   const list = document.getElementById("zoneList");
   const empty = document.getElementById("zoneEmpty");
   list.innerHTML = "";
-  notifyZones.forEach((zone, i) => {
+  notifyZones.forEach((zone) => {
     const li = document.createElement("li");
     li.className = "zone-list-item";
-    const name = document.createElement("span");
-    name.className = "zone-list-name";
-    name.textContent = `Zona ${i + 1}`;
+
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.className = "zone-list-color";
+    colorInput.value = zone.color;
+    colorInput.setAttribute("aria-label", `Colore di ${zone.name}`);
+    colorInput.addEventListener("input", () => {
+      zone.color = colorInput.value;
+      persistZones();
+      renderZonesSource();
+    });
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "zone-list-name";
+    nameInput.value = zone.name;
+    nameInput.setAttribute("aria-label", "Nome della zona");
+    nameInput.maxLength = 40;
+    nameInput.addEventListener("input", () => {
+      // un nome vuoto non deve sparire dalla mappa/dalla notifica: si
+      // salva solo se resta un testo utile, altrimenti si tiene il
+      // vecchio finché l'utente non ne scrive uno
+      zone.name = nameInput.value.trim() ? nameInput.value : zone.name;
+      persistZones();
+    });
+    nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") nameInput.blur();
+    });
+
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "zone-list-remove";
-    removeBtn.setAttribute("aria-label", `Rimuovi Zona ${i + 1}`);
+    removeBtn.setAttribute("aria-label", `Rimuovi ${zone.name}`);
     removeBtn.innerHTML = ZONE_TRASH_ICON;
     removeBtn.addEventListener("click", () => removeZone(zone.id));
-    li.append(name, removeBtn);
+
+    li.append(colorInput, nameInput, removeBtn);
     list.appendChild(li);
   });
   empty.hidden = notifyZones.length > 0;
@@ -2573,7 +2626,12 @@ function setupRainZone() {
     drawPointerId = null;
     const saved = drawPoints.length >= MIN_DRAW_POINTS;
     if (saved) {
-      notifyZones.push({ id: `zone-${Date.now()}`, points: drawPoints });
+      notifyZones.push({
+        id: `zone-${Date.now()}`,
+        points: drawPoints,
+        name: `Zona ${notifyZones.length + 1}`,
+        color: nextZoneColor(),
+      });
       persistZones();
       renderZonesSource();
       renderZoneList();
@@ -3075,8 +3133,21 @@ map.on("load", () => {
   resizeHeatCanvas();
   setMapType(mapType);
   map.addSource("notifyZones", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-  map.addLayer({ id: "notifyZonesFill", type: "fill", source: "notifyZones", paint: { "fill-color": "#6fa8dc", "fill-opacity": 0.15 } });
-  map.addLayer({ id: "notifyZonesLine", type: "line", source: "notifyZones", paint: { "line-color": "#6fa8dc", "line-width": 2 } });
+  // il colore di ogni zona è personalizzabile (vedi renderZoneList): la
+  // proprietà "color" della feature vince, "#6fa8dc" resta il ripiego per
+  // le zone salvate prima ancora del backfill fatto al caricamento
+  map.addLayer({
+    id: "notifyZonesFill",
+    type: "fill",
+    source: "notifyZones",
+    paint: { "fill-color": ["coalesce", ["get", "color"], "#6fa8dc"], "fill-opacity": 0.15 },
+  });
+  map.addLayer({
+    id: "notifyZonesLine",
+    type: "line",
+    source: "notifyZones",
+    paint: { "line-color": ["coalesce", ["get", "color"], "#6fa8dc"], "line-width": 2 },
+  });
   map.addSource("zoneDrawPreview", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
   map.addLayer({ id: "zoneDrawPreviewFill", type: "fill", source: "zoneDrawPreview", paint: { "fill-color": "#6fa8dc", "fill-opacity": 0.12 } });
   map.addLayer({
