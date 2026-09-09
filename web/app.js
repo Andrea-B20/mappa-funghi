@@ -59,11 +59,30 @@ function latLonToWebMercator(lat, lon) {
 // si può chiedere il valore del punto vero, ed è quello che conta a chi sta
 // decidendo dove andare. Il servizio è lento e a tratti irraggiungibile:
 // chi chiama gestisce il fallimento lasciando il pH a null (neutro).
+// Nessuno di questi due servizi è sotto il nostro controllo e SoilGrids in
+// particolare ha tempi molto variabili (misurati da 364ms fino a 17s sullo
+// stesso giro di punti): senza un tetto, una richiesta rimasta appesa
+// lascerebbe per sempre il dato "in arrivo" nel popup.
+function fetchWithTimeout(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+const SOIL_PH_TIMEOUT_MS = 12000;
+const CLC_TIMEOUT_MS = 8000;
+const WEATHER_TIMEOUT_MS = 15000;
+// quanto il primo disegno del popup può aspettare la vegetazione prima di
+// partire senza (misurata sui 110-280ms: il tetto serve solo ai casi storti)
+const VEG_FIRST_PAINT_WAIT_MS = 1200;
+// "non ancora arrivato", distinto da null che significa "non disponibile"
+const PENDING = Symbol("pending");
+
 async function fetchSoilPh(lat, lon) {
   const url =
     `https://rest.isric.org/soilgrids/v2.0/properties/query?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}` +
     `&property=phh2o&depth=5-15cm&depth=15-30cm&value=mean`;
-  const resp = await fetch(url);
+  const resp = await fetchWithTimeout(url, SOIL_PH_TIMEOUT_MS);
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   const layers = (await resp.json())?.properties?.layers || [];
   const values = [];
@@ -76,6 +95,26 @@ async function fetchSoilPh(lat, lon) {
   }
   if (!values.length) return null;
   return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
+}
+
+// Il pH cambia con gradualità sul terreno: la cache in repo lo tiene a
+// maglie di 0.01° (~1km, vedi scripts/fetch_soil_ph.py e phAt) e qui usiamo
+// la stessa risoluzione, così ri-cliccare nella stessa zona non ripaga
+// l'attesa del servizio più lento della catena.
+const soilPhCache = new Map();
+
+function fetchSoilPhCached(lat, lon) {
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const hit = soilPhCache.get(key);
+  if (hit) return hit;
+  const pending = fetchSoilPh(lat, lon).catch((err) => {
+    // un fallimento non va tenuto in cache: il prossimo click sulla zona
+    // deve poter riprovare invece di ereditare per sempre l'errore
+    soilPhCache.delete(key);
+    throw err;
+  });
+  soilPhCache.set(key, pending);
+  return pending;
 }
 
 async function fetchClcVegClass(lat, lon) {
@@ -91,7 +130,7 @@ async function fetchClcVegClass(lat, lon) {
     returnGeometry: "false",
     f: "json",
   });
-  const resp = await fetch(`${CLC_IDENTIFY_URL}?${params}`);
+  const resp = await fetchWithTimeout(`${CLC_IDENTIFY_URL}?${params}`, CLC_TIMEOUT_MS);
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   const data = await resp.json();
   const results = data.results || [];
@@ -1750,7 +1789,12 @@ function buildRainChartHtml(dates, precip, highlight = null) {
     </div>`;
 }
 
-function popupContent(lat, lon, data, openIdx = null) {
+// Tutto ciò che si ricava dai dati grezzi di un punto (meteo + vegetazione +
+// pH). Estratto da popupContent perché serve anche a rigenerare le sole
+// parti che cambiano quando vegetazione e pH arrivano DOPO il primo disegno
+// (vedi refreshPopupLateFields e onMapClick): senza, i punteggi ricalcolati
+// in ritardo verrebbero da una copia divergente di questa logica.
+function popupDerived(data) {
   const daily = data.daily || {};
   // Unico punto in cui si decide quanti giorni di storico entrano nel
   // popup: grafico e analisi delle specie leggono lo STESSO array, quindi i
@@ -1813,6 +1857,86 @@ function popupContent(lat, lon, data, openIdx = null) {
   };
   const species = speciesReadinessList(env);
 
+  return {
+    dates,
+    precip,
+    rainShort,
+    humidityMin,
+    soilPercent,
+    soilTempC,
+    elevation,
+    veg,
+    env,
+    species,
+  };
+}
+
+// Le righe delle specie sono l'unica parte del popup che dipende da TUTTI i
+// dati del punto: quando pH o vegetazione arrivano in ritardo i punteggi
+// cambiano, e vanno riscritte da sole (vedi refreshPopupLateFields) senza
+// ridisegnare l'intero popup sotto le dita di chi sta già leggendo.
+function speciesListHtml(species, openIdx = null) {
+  return species
+    .map((r, idx) => {
+      const badge = speciesStatusBadge(r);
+      const days = speciesWhenLabel(r);
+      const isOpen = idx === openIdx;
+      const detailHtml = isOpen ? `<li class="wx-species-detail">${speciesDetailHtml(r)}</li>` : "";
+      return `
+      <li class="wx-species-row${isOpen ? " wx-species-row-open" : ""}" data-idx="${idx}" onclick="toggleSpeciesDetail(${idx})">
+        <span class="wx-species-dot" style="background:${r.color}"></span>
+        <span class="wx-species-name">${r.label}</span>
+        <span class="wx-species-days">${days}</span>
+        <span class="wx-species-badge wx-badge-${badge.cls}">${badge.word}</span>
+        <span class="wx-chevron">›</span>
+      </li>${detailHtml}`;
+    })
+    .join("");
+}
+
+// Segnaposto per un dato ancora in viaggio: va distinto da "n/d" (assente
+// davvero), altrimenti nell'attesa il popup afferma qualcosa di falso —
+// vale soprattutto per il bosco, dove "nessun bosco significativo qui" e
+// "non lo so ancora" sono affermazioni molto diverse per chi decide dove
+// andare a cercare.
+const PENDING_HTML = '<span class="wx-pending">…</span>';
+
+function phTileValue(data) {
+  if (data.ph != null) return phLabel(data.ph);
+  return data.phPending ? PENDING_HTML : "n/d";
+}
+
+// Aggiorna SOLO le parti che dipendono da vegetazione e pH, cioè i due dati
+// che possono arrivare dopo il primo disegno. Un setPopupHTML completo
+// funzionerebbe, ma rifà partire l'animazione di comparsa e ricostruisce il
+// DOM anche diversi secondi dopo, mentre l'utente sta già leggendo o ha
+// aperto la spiegazione di una specie: qui invece si riscrivono la casella
+// del pH, la riga del bosco e le righe delle specie (i cui punteggi
+// dipendono da entrambi) lasciando fermo tutto il resto.
+function refreshPopupLateFields(popup, data) {
+  const root = popup.getElement()?.querySelector(".wx-popup");
+  if (!root) return;
+
+  const phValue = root.querySelector("[data-wx-ph] .wx-tile-value");
+  if (phValue) phValue.innerHTML = phTileValue(data);
+
+  const { veg, species } = popupDerived(data);
+
+  const forestLabel = root.querySelector("[data-wx-forest] span");
+  if (forestLabel) forestLabel.innerHTML = data.vegPending ? PENDING_HTML : veg.typeLabel;
+
+  const list = root.querySelector(".wx-species-list");
+  if (list) list.innerHTML = speciesListHtml(species, openSpeciesIdx);
+
+  // la riga del bosco e i badge possono cambiare di poco l'altezza: se il
+  // popup non ci sta più dal lato scelto, va ripreso il lato giusto
+  updatePopupAnchor(popup);
+}
+
+function popupContent(lat, lon, data, openIdx = null) {
+  const { dates, precip, rainShort, humidityMin, soilPercent, soilTempC, elevation, veg, species } =
+    popupDerived(data);
+
   // le barre evidenziate sono esattamente i giorni citati nella
   // spiegazione aperta — anche quando è una pioggia recente non ancora
   // "incubata" (r.pending), che prima non veniva né citata né evidenziata
@@ -1822,8 +1946,8 @@ function popupContent(lat, lon, data, openIdx = null) {
     ? { start: openEvent.windowStartDate, end: openEvent.eventDate, mm: openEvent.mm }
     : null;
 
-  const tile = (icon, label, value) => `
-    <div class="wx-tile">
+  const tile = (icon, label, value, attrs = "") => `
+    <div class="wx-tile"${attrs}>
       ${icon}
       <div>
         <p class="wx-tile-label">${label}</p>
@@ -1831,20 +1955,6 @@ function popupContent(lat, lon, data, openIdx = null) {
       </div>
     </div>`;
 
-  const speciesRow = (r, idx) => {
-    const badge = speciesStatusBadge(r);
-    const days = speciesWhenLabel(r);
-    const isOpen = idx === openIdx;
-    const detailHtml = isOpen ? `<li class="wx-species-detail">${speciesDetailHtml(r)}</li>` : "";
-    return `
-      <li class="wx-species-row${isOpen ? " wx-species-row-open" : ""}" data-idx="${idx}" onclick="toggleSpeciesDetail(${idx})">
-        <span class="wx-species-dot" style="background:${r.color}"></span>
-        <span class="wx-species-name">${r.label}</span>
-        <span class="wx-species-days">${days}</span>
-        <span class="wx-species-badge wx-badge-${badge.cls}">${badge.word}</span>
-        <span class="wx-chevron">›</span>
-      </li>${detailHtml}`;
-  };
 
   return `
     <div class="wx-popup">
@@ -1856,19 +1966,19 @@ function popupContent(lat, lon, data, openIdx = null) {
         ${tile(ICONS.soil, "Terreno", soilPercent != null ? soilPercent + "%" : "n/d")}
         ${tile(ICONS.humidity, "Aria min", humidityMin != null ? humidityMin + "%" : "n/d")}
         ${tile(ICONS.elevation, "Quota", elevation != null ? elevation + " m" : "n/d")}
-        ${tile(ICONS.ph, "pH suolo", data.ph != null ? phLabel(data.ph) : "n/d")}
+        ${tile(ICONS.ph, "pH suolo", phTileValue(data), " data-wx-ph")}
       </div>
 
       ${buildRainChartHtml(dates, precip, highlight)}
 
-      <div class="wx-forest-line">
+      <div class="wx-forest-line" data-wx-forest>
         ${ICONS.forest}
-        <span>${veg.typeLabel}</span>
+        <span>${data.vegPending ? PENDING_HTML : veg.typeLabel}</span>
       </div>
 
       <p class="wx-section-title">Specie tracciate <span class="wx-section-hint">(tocca per il motivo)</span></p>
       <ul class="wx-species-list">
-        ${species.map(speciesRow).join("")}
+        ${speciesListHtml(species, openIdx)}
       </ul>
     </div>`;
 }
@@ -2843,27 +2953,60 @@ function onMapClick(e) {
     `&hourly=relative_humidity_2m,soil_moisture_3_to_9cm,soil_moisture_9_to_27cm,soil_temperature_6cm` +
     `&past_days=16&forecast_days=1&timezone=auto`;
 
-  Promise.all([
-    fetch(url).then((r) => {
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
-    }),
-    // Corine e SoilGrids sono entrambi facoltativi: se uno non risponde il
-    // popup resta utile con quel che c'è (il fattore corrispondente vale 1,
-    // cioè neutro) invece di fallire in blocco. Meteo a parte, nessuno dei
-    // due vale il rischio di non mostrare nulla.
-    fetchClcVegClass(lat, lng).catch(() => null),
-    fetchSoilPh(lat, lng).catch(() => null),
-  ])
-    .then(([data, vegClass, ph]) => {
-      if (popup.isOpen()) {
-        data.vegClass = vegClass;
-        data.ph = ph;
-        lastPopupParams = { lat, lon: lng, data };
-        setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
-        updatePopupAnchor(popup);
-        animatePopupReveal(popup);
+  // Le tre fonti hanno tempi molto diversi: meteo ~100-300ms, Corine
+  // ~110-280ms, SoilGrids da 350ms a 17 SECONDI (misurato: è un servizio
+  // pubblico gratuito con code imprevedibili, non c'è modo di accelerarlo).
+  // Aspettandole tutte e tre insieme, come si faceva prima, il popup restava
+  // sullo scheletro "Recupero dati meteo…" per quanto ci metteva la più
+  // lenta: quasi sempre SoilGrids, cioè il dato MENO importante dei tre.
+  // Adesso si disegna appena ci sono meteo e vegetazione, e il pH si
+  // aggiunge quando arriva.
+  const weatherP = fetchWithTimeout(url, WEATHER_TIMEOUT_MS).then((r) => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  });
+  // Corine e SoilGrids sono entrambi facoltativi: se uno non risponde il
+  // popup resta utile con quel che c'è (il fattore corrispondente vale 1,
+  // cioè neutro) invece di fallire in blocco. Meteo a parte, nessuno dei
+  // due vale il rischio di non mostrare nulla.
+  const vegP = fetchClcVegClass(lat, lng).catch(() => null);
+  const phP = fetchSoilPhCached(lat, lng).catch(() => null);
+
+  // la vegetazione è veloce quanto il meteo e pesa parecchio sui punteggi:
+  // vale la pena aspettarla per il primo disegno, ma non oltre un tetto —
+  // se tarda si disegna comunque e la si aggiunge dopo, come il pH
+  const vegForFirstPaint = Promise.race([
+    vegP,
+    new Promise((resolve) => setTimeout(() => resolve(PENDING), VEG_FIRST_PAINT_WAIT_MS)),
+  ]);
+
+  Promise.all([weatherP, vegForFirstPaint])
+    .then(([data, veg]) => {
+      if (!popup.isOpen()) return;
+      data.vegPending = veg === PENDING;
+      data.vegClass = data.vegPending ? null : veg;
+      data.phPending = true;
+      lastPopupParams = { lat, lon: lng, data };
+      setPopupHTML(popup, popupContent(lat, lng, data, openSpeciesIdx));
+      updatePopupAnchor(popup);
+      animatePopupReveal(popup);
+
+      // da qui in poi si aggiornano solo le parti interessate: il popup è
+      // già leggibile e non deve più essere ricostruito sotto gli occhi
+      if (data.vegPending) {
+        vegP.then((v) => {
+          if (!popup.isOpen() || lastPopupParams?.data !== data) return;
+          data.vegClass = v;
+          data.vegPending = false;
+          refreshPopupLateFields(popup, data);
+        });
       }
+      phP.then((ph) => {
+        if (!popup.isOpen() || lastPopupParams?.data !== data) return;
+        data.ph = ph;
+        data.phPending = false;
+        refreshPopupLateFields(popup, data);
+      });
     })
     .catch((err) => {
       console.error(err);

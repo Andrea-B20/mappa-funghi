@@ -1369,6 +1369,18 @@ main {
 }
 @keyframes wx-spin { to { transform: rotate(360deg); } }
 
+/* dato ancora in arrivo (pH, vegetazione): un battito lento sull'opacità
+   dice "sto aspettando" senza far muovere nulla — il resto del popup è già
+   leggibile e non deve saltare intorno a un segnaposto */
+.wx-pending {
+  color: var(--text-faint);
+  animation: wx-pending-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wx-pending-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 .wx-popup .wx-error { color: var(--dry); }
 
 /* ---------------------------------------------------------------------
