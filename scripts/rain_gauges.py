@@ -39,7 +39,7 @@ Copertura
 ---------
 Le reti pluviometriche italiane non hanno un'API nazionale: ogni regione
 pubblica per conto suo, con formati diversi, e diverse non pubblicano
-affatto in modo interrogabile. Qui ci sono le quattro reti verificate
+affatto in modo interrogabile. Qui ci sono le cinque reti verificate
 funzionanti; dove non arriva nessun pluviometro la cella resta sul
 modello (vedi fetch_weather_grid.py, che segna la provenienza cella per
 cella così la mappa può dirlo).
@@ -91,11 +91,11 @@ TIMEOUT = 120
 ROMA = ZoneInfo("Europe/Rome")
 
 
-def _get(url, params=None, retries=3, base_delay=3, **kwargs):
+def _get(url, params=None, retries=3, base_delay=3, timeout=TIMEOUT, **kwargs):
     last = None
     for attempt in range(retries):
         try:
-            resp = requests.get(url, params=params, timeout=TIMEOUT, **kwargs)
+            resp = requests.get(url, params=params, timeout=timeout, **kwargs)
             resp.raise_for_status()
             return resp
         except requests.RequestException as e:
@@ -383,11 +383,112 @@ def fetch_emilia(days):
     return out
 
 
+# --------------------------------------------------------------------------
+# Toscana — provata a fondo, NON collegata. Il Centro Funzionale Regionale
+# pubblica 379 pluviometri e i dati ci sono, ma nessuna delle due strade
+# porta a un totale giornaliero affidabile:
+#
+#   - actions.php?action=station&id=... dà la pioggia di ieri spezzata in
+#     fasce di tre ore (CUM48_00_03 ... CUM48_21_24), che è esattamente
+#     quello che serve. Verificato che l'interpretazione è giusta: le fasce
+#     sommate tornano al totale dichiarato dal servizio e correlano a 0.87
+#     con il modello negli stessi punti. Ma è una richiesta per stazione, e
+#     il server risponde 429 ben prima di arrivare in fondo alle 379 —
+#     anche rallentando a due richieste al secondo. Un aggiornamento
+#     notturno che martella così un servizio pubblico non si fa comunque.
+#
+#   - actions.php?action=CUM24 e ?action=CUM48 danno tutte le stazioni in
+#     una richiesta sola, ma su finestre che partono dalla mezzanotte di
+#     ieri e dell'altroieri, non su un giorno solare. La differenza fra le
+#     due DOVREBBE essere il totale dell'altroieri; non è stato possibile
+#     verificarlo perché nel giorno del controllo era asciutto ovunque in
+#     Toscana, e mettere in archivio come misura un'interpretazione non
+#     verificata è il contrario di quello che fa questo file.
+#
+# Da riprendere dopo una giornata di pioggia diffusa: se la differenza fra
+# le due cumulate risulta un totale giornaliero vero, la Toscana entra al
+# costo di due richieste a notte.
+# --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# Campania — Centro Funzionale Multirischi di Protezione Civile.
+#
+# 214 pluviometri fra Matese, Picentini, Cilento e Partenio. È l'unica
+# rete del sud che risponde con dati interrogabili, e porta l'app dove
+# finora non arrivava nulla.
+#
+# Qui la serie oraria c'è davvero, due giorni pieni più il giorno in corso,
+# quindi il totale giornaliero si costruisce sommando le ore.
+# --------------------------------------------------------------------------
+
+CAMPANIA_BASE = "https://centrofunzionale.regione.campania.it/CentroFunzionalePortaleRest/rest/recuperodati"
+
+# "Pluviometro Areale" non è uno strumento: è una media calcolata su un
+# bacino. Interpolarla insieme alle misure vere significherebbe dare peso
+# di misura a un numero che è già una stima di qualcun altro.
+CAMPANIA_TIPO = "Pluviometro Puntuale"
+
+
+def fetch_campania(days):
+    stazioni = _get(f"{CAMPANIA_BASE}/stazioniByFilters").json().get("listaStazioni", [])
+    coords = {}
+    for st in stazioni:
+        try:
+            # i decimali arrivano con la virgola, non con il punto
+            coords[str(st["idStazione"])] = (
+                float(str(st["latitudine"]).replace(",", ".")),
+                float(str(st["longitudine"]).replace(",", ".")),
+                st.get("denominazione", ""),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    sensori = [s for s in _get(f"{CAMPANIA_BASE}/sensoriByFilters").json()
+               if s.get("tipoSensore") == CAMPANIA_TIPO and s.get("attivo")]
+
+    wanted = {d.isoformat() for d in days}
+    out = []
+    for sensore in sensori:
+        key = str(sensore.get("idStazione"))
+        if key not in coords:
+            continue
+        try:
+            # come per le altre reti interrogate sensore per sensore: tetto
+            # stretto, perche' 214 richieste con il timeout generale da due
+            # minuti possono trasformare una rete lenta in un aggiornamento
+            # notturno che non finisce. Un sensore che tarda si salta.
+            data = _get(f"{CAMPANIA_BASE}/temporeale/{sensore['idSensore']}",
+                        retries=2, base_delay=1, timeout=15).json().get("data", [])
+        except (requests.RequestException, ValueError):
+            continue
+        per_day = {}
+        ore = {}
+        for row in data:
+            stamp = (row.get("timestamp") or "")[:10]
+            value = row.get("value")
+            if stamp not in wanted or value is None or value < 0:
+                continue
+            per_day[stamp] = round(per_day.get(stamp, 0.0) + float(value), 1)
+            ore[stamp] = ore.get(stamp, 0) + 1
+        # solo i giorni con tutte e 24 le ore: il giorno in corso e quelli
+        # a cui manca qualche lettura darebbero un totale sottostimato
+        per_day = {d: mm for d, mm in per_day.items() if ore.get(d) == 24}
+        if not per_day:
+            continue
+        lat, lon, name = coords[key]
+        out.append({"id": f"cam:{sensore['idSensore']}", "name": name,
+                    "network": "Centro Funzionale Campania",
+                    "lat": lat, "lon": lon, "daily": per_day})
+        time.sleep(0.05)
+    return out
+
+
 PROVIDERS = [
     ("Lombardia", fetch_lombardia),
     ("Piemonte", fetch_piemonte),
     ("Trentino", fetch_trentino),
     ("Emilia-Romagna", fetch_emilia),
+    ("Campania", fetch_campania),
 ]
 
 
