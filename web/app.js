@@ -51,7 +51,7 @@ function latLonToWebMercator(lat, lon) {
 
 // Vegetazione REALE nel punto esatto cliccato, interrogata dal vivo nel
 // browser (Corine Land Cover ha CORS aperto — verificato) invece che presa
-// dalla cella meteo più vicina (fino a 30-40km di distanza, troppo per
+// dalla cella meteo più vicina (fino a ~20km di distanza, troppo per
 // dire con affidabilità se lì c'è bosco o no): stessa fonte usata per
 // popolare i dati server-side, ma qui alla precisione del singolo click.
 // pH del suolo nel punto esatto cliccato (SoilGrids 2.0, ISRIC). Sulla
@@ -77,6 +77,187 @@ const WEATHER_TIMEOUT_MS = 15000;
 const VEG_FIRST_PAINT_WAIT_MS = 1200;
 // "non ancora arrivato", distinto da null che significa "non disponibile"
 const PENDING = Symbol("pending");
+
+/* ---------------- Quanta pioggia è davvero caduta ------------------- */
+// Un modello meteo non misura la pioggia: la calcola. Confrontando le celle
+// dell'app con i 256 pluviometri della rete lombarda (15.454 coppie
+// stazione-giorno) il modello singolo che si usava prima dava per piovosi
+// il 12.8% di giorni in cui al pluviometro non era caduto nulla, e nel
+// complesso il 25% di acqua in più del vero. Sulla griglia larga che l'app
+// disegnava, i falsi positivi erano il 17.6%.
+//
+// Qui il popup applica le stesse due correzioni della griglia (vedi
+// scripts/fetch_weather_grid.py e scripts/rain_gauges.py), così cliccare un
+// punto e guardarne la cella raccontano la stessa pioggia:
+//   1. tre modelli di tre centri meteorologici diversi invece di uno
+//   2. dove esistono, i pluviometri veri al posto del calcolo
+//
+// Tre e non quattro: provate tutte le combinazioni contro i pluviometri,
+// aggiungere GFS a questi tre peggiorava (errore da 11.7 a 11.9 mm sui 7
+// giorni, falsi positivi dal 2.5% al 2.9%).
+const RAIN_MODELS = ["ecmwf_ifs025", "icon_seamless", "ukmo_seamless"];
+const GAUGE_MAX_KM = 25;
+const GAUGE_K = 3;
+// sotto questo peso i pluviometri contano troppo poco perché il punto
+// possa dirsi "misurato": restano nel calcolo, ma la riga sotto il grafico
+// dice onestamente che è ancora il modello
+const MIN_MEASURED_WEIGHT = 0.1;
+
+let rainGauges = [];
+
+// I pluviometri sono un file statico aggiornato ogni notte insieme alla
+// griglia. Si carica una volta sola e nessuno lo aspetta: se manca o
+// tarda, il popup resta sui modelli.
+function loadRainGauges() {
+  return fetch("data/rain_gauges.json", { cache: "no-cache" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      const stations = data?.stations || {};
+      rainGauges = Object.values(stations)
+        .filter((s) => s && typeof s.lat === "number" && typeof s.lon === "number")
+        .map((s) => ({ lat: s.lat, lon: s.lon, network: s.network, daily: s.daily || {} }));
+    })
+    .catch(() => {});
+}
+
+function gaugeDistanceKm(lat1, lon1, lat2, lon2) {
+  const dLat = lat1 - lat2;
+  const dLon = (lon1 - lon2) * Math.cos((lat1 * Math.PI) / 180);
+  return 111 * Math.hypot(dLat, dLon);
+}
+
+// I pluviometri entro il raggio utile, dal più vicino. Oltre i 25 km un
+// pluviometro racconta la pioggia di un'altra valle, non di questa: provati
+// 15, 25 e 40 km, a 25 l'errore tocca il minimo.
+function gaugesNear(lat, lon) {
+  if (!rainGauges.length) return [];
+  const found = [];
+  for (const g of rainGauges) {
+    if (Math.abs(g.lat - lat) > 0.3 || Math.abs(g.lon - lon) > 0.4) continue;
+    const km = gaugeDistanceKm(lat, lon, g.lat, g.lon);
+    if (km <= GAUGE_MAX_KM) found.push({ km, daily: g.daily, network: g.network });
+  }
+  return found.sort((a, b) => a.km - b.km);
+}
+
+// Media pesata 1/distanza²: il pluviometro a 3 km conta cento volte quello
+// a 30. Verificato togliendo a turno una stazione e provando a indovinarla
+// dalle vicine: 1.6mm di errore medio al giorno contro i 3.5 del modello.
+function gaugeEstimate(nearby, day) {
+  let num = 0;
+  let den = 0;
+  let used = 0;
+  for (const g of nearby) {
+    const mm = g.daily[day];
+    if (mm == null) continue;
+    const w = 1 / Math.pow(Math.max(g.km, 1), 2);
+    num += w * mm;
+    den += w;
+    if (++used >= GAUGE_K) break;
+  }
+  return den ? { mm: num / den, count: used } : null;
+}
+
+// Un giorno su cui tutti i modelli mettono pioggia è quasi sempre pioggia
+// vera; uno su cui la mette un modello solo è quasi sempre la pioviggine
+// inventata da quel modello. Moltiplicare la media per la
+// frazione di modelli concordi tiene interi i primi e sgonfia i secondi.
+function blendModelPrecip(seriesPerModel, days) {
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const vals = [];
+    for (const serie of seriesPerModel) {
+      const v = serie?.[i];
+      if (v != null) vals.push(v);
+    }
+    if (!vals.length) {
+      out.push(null);
+      continue;
+    }
+    const agree = vals.filter((v) => v >= 1.0).length / vals.length;
+    out.push((vals.reduce((a, b) => a + b, 0) / vals.length) * agree);
+  }
+  return out;
+}
+
+// Non è un aut-aut fra misura e calcolo: un solo pluviometro a 24 km è un
+// indizio, tre a 5 km sono una misura. Il peso cresce con la vicinanza e
+// con quanti sono.
+function blendWithGauges(dates, modelPrecip, lat, lon) {
+  const nearby = gaugesNear(lat, lon);
+  if (!nearby.length) return { precip: modelPrecip, source: "modello", count: 0, km: null };
+
+  const nearestKm = Math.round(nearby[0].km * 10) / 10;
+  const closeness = Math.max(0, Math.min(1, 1 - nearestKm / GAUGE_MAX_KM));
+  const out = [];
+  let measured = 0;
+  let maxCount = 0;
+  for (let i = 0; i < dates.length; i++) {
+    const model = modelPrecip[i];
+    const est = gaugeEstimate(nearby, dates[i]);
+    if (!est) {
+      out.push(model);
+      continue;
+    }
+    const weight = est.count >= 2 ? 0.5 + 0.5 * closeness : 0.4 * closeness;
+    out.push(model == null ? est.mm : weight * est.mm + (1 - weight) * model);
+    if (weight >= MIN_MEASURED_WEIGHT) {
+      measured++;
+      maxCount = Math.max(maxCount, est.count);
+    }
+  }
+  // "misto" sono i giorni più vecchi della finestra, entrati in archivio
+  // prima che la rete regionale fosse collegata: restano sul modello
+  // mentre i recenti sono misurati
+  const source = measured === 0 ? "modello" : measured >= dates.length - 1 ? "pluviometri" : "misto";
+  return {
+    precip: out,
+    source,
+    count: maxCount,
+    km: measured ? nearestKm : null,
+    network: nearby[0].network || null,
+  };
+}
+
+// Una riga sotto il grafico che dice da dove viene la pioggia disegnata:
+// "misurata da 3 pluviometri" e "stimata da 3 modelli" sono due gradi di
+// fiducia diversi, e chi decide dove andare a funghi ha diritto di sapere
+// quale dei due sta guardando.
+function rainSourceLabel(source, count, km, network) {
+  const who = network ? ` (${network})` : "";
+  if (source === "pluviometri") {
+    return `Misurata da ${count} pluviometr${count === 1 ? "o" : "i"}${who}, il più vicino a ${km}km`;
+  }
+  if (source === "misto") {
+    return `Giorni recenti misurati da pluviometri${who} a ${km}km, i più vecchi stimati`;
+  }
+  return "Stimata dalla media di 3 modelli meteo: nessun pluviometro vicino";
+}
+
+// Sostituisce nel payload di Open-Meteo la pioggia a modello singolo con
+// quella corretta, PRIMA che chiunque la legga: grafico, spiegazioni e
+// punteggi delle specie leggono tutti data.daily.precipitation_sum, quindi
+// correggendola qui non esiste un pezzo di popup che racconti la vecchia.
+function applyRainCorrection(data, models, lat, lon) {
+  const daily = data?.daily || {};
+  const dates = daily.time || [];
+  if (!dates.length) return data;
+
+  let precip = daily.precipitation_sum || [];
+  const modelDaily = models?.daily;
+  if (modelDaily && (modelDaily.time || []).length === dates.length) {
+    const series = RAIN_MODELS.map((m) => modelDaily[`precipitation_sum_${m}`]).filter(Boolean);
+    if (series.length) precip = blendModelPrecip(series, dates.length);
+  }
+
+  const blended = blendWithGauges(dates, precip, lat, lon);
+  daily.precipitation_sum = blended.precip;
+  data.rainSource = blended.source;
+  data.rainGaugeCount = blended.count;
+  data.rainGaugeKm = blended.km;
+  data.rainGaugeNetwork = blended.network;
+  return data;
+}
 
 async function fetchSoilPh(lat, lon) {
   const url =
@@ -480,7 +661,7 @@ const MODE_LABELS = {
   },
   meteo: {
     title: "Favorevolezza meteo attuale",
-    desc: "Pioggia nella finestra utile di ogni specie, pesata per la temperatura dei giorni di incubazione e per quanta di quella pioggia l'evaporazione ha già ripreso; poi tipo di bosco, quota, pH del suolo, temperatura del terreno e periodo dell'anno in cui la specie si trova davvero.",
+    desc: "Pioggia misurata dai pluviometri regionali dove ci sono, altrimenti media di tre modelli meteo, nella finestra utile di ogni specie: pesata per la temperatura dei giorni di incubazione e per quanta di quella pioggia l'evaporazione ha già ripreso; poi tipo di bosco, quota, pH del suolo, temperatura del terreno e periodo dell'anno in cui la specie si trova davvero.",
   },
   combinato: {
     title: "Probabilità stimata",
@@ -1127,7 +1308,7 @@ let weatherGridStepDeg = 0.5;
 // vegetazione/quota REALI alla risoluzione fine (0.15°, la stessa di
 // buildHistoricalGrid), precalcolate solo per le celle che contengono
 // ritrovamenti storici — vedi scripts/fetch_vegetation_fine.py. Sostituisce
-// la cella meteo più vicina (0.5°, fino a 30-40km di distanza) come fonte
+// la cella meteo più vicina (0.3°, fino a ~20km di distanza) come fonte
 // di vegetazione per "Combinato": un ritrovamento reale in fondovalle non
 // deve più ereditare "nessun bosco" dalla vetta alpina più vicina sulla
 // griglia meteo.
@@ -1176,7 +1357,7 @@ function bindMarkerToPopup(popup, marker) {
 }
 
 // risoluzione per lo storico/combinato: più fine della griglia meteo
-// (0.5°) perché i punti GBIF sono molto più numerosi e localizzati delle
+// (0.3°) perché i punti GBIF sono molto più numerosi e localizzati delle
 // celle meteo, quindi meritano zone più piccole e precise
 const FINE_GRID_STEP_DEG = 0.15;
 
@@ -1619,7 +1800,7 @@ function zonesForCombinato() {
   const raw = cells.map((c) => {
     const norm = c.count / maxCount;
     // meteo/condizioni del suolo: variano con continuità su decine di km,
-    // la cella meteo (0.5°) più vicina va benissimo per questi
+    // la cella meteo (0.3°) più vicina va benissimo per questi
     const nearest = nearestWeatherCell(c.lat, c.lon);
     const conditions = nearest
       ? conditionsQuality(
@@ -1632,7 +1813,7 @@ function zonesForCombinato() {
     // vegetazione e quota invece cambiano bruscamente nel giro di poche
     // centinaia di metri in montagna: qui serve il dato alla risoluzione
     // fine calcolato apposta su questa esatta cella con ritrovamenti,
-    // non la cella meteo più vicina (poteva distare 30-40km)
+    // non la cella meteo più vicina (può distare fino a ~20km)
     const fineVeg = vegetationFineByKey.get(c.key);
     const habitat = fineVeg ? fineVeg.habitat_score : nearest ? (nearest.properties.habitat_score ?? 0.5) : 0.5;
     const elevation = fineVeg ? fineVeg.elevation_m : nearest ? nearest.properties.elevation_m : null;
@@ -1640,7 +1821,7 @@ function zonesForCombinato() {
     // meteo dalla cella grande più vicina, ma vegetazione/quota/pH dal dato
     // fine calcolato su QUESTA cella: il pH in particolare cambia nel giro di
     // pochi km (arenaria contro calcare) e prenderlo dalla cella meteo a
-    // 30-40km sarebbe peggio che non averlo
+    // 20km sarebbe peggio che non averlo
     const readiness = nearest
       ? activeSpeciesReadinessAt(envFromWeatherCell(nearest, { vegClass, elevation, ph: phAt(c.lat, c.lon) }))
       : 0.5;
@@ -1740,7 +1921,7 @@ function popupError(lat, lon) {
 // dal grafico (nel dataset attuale succedeva in 1 spiegazione su 5, fino a
 // "52mm" a fronte di 7.5mm di barre visibili). Chi taglia è popupContent,
 // una volta sola, per entrambi.
-function buildRainChartHtml(dates, precip, highlight = null) {
+function buildRainChartHtml(dates, precip, highlight = null, provenance = null) {
   const d = dates;
   const p = precip.map((v) => v || 0);
   if (!d.length) return "";
@@ -1788,6 +1969,19 @@ function buildRainChartHtml(dates, precip, highlight = null) {
     ? `${fmtDateRangeCompact(highlight.start, highlight.end)}: ${highlight.mm}mm`
     : `Totale: ${Math.round(total)}mm`;
 
+  // Da dove viene la pioggia disegnata. Sta sotto al grafico e non sopra
+  // perché è una nota sulla fiducia, non un titolo: chi guarda le barre
+  // deve poter sapere se sono una misura o una stima senza che la riga
+  // rubi la scena al dato.
+  const sourceLine = provenance
+    ? `<p class="wx-rain-source wx-rain-source-${provenance.source}">${rainSourceLabel(
+        provenance.source,
+        provenance.count,
+        provenance.km,
+        provenance.network
+      )}</p>`
+    : "";
+
   return `
     <div class="wx-rain-section">
       <div class="wx-rain-header">
@@ -1800,6 +1994,7 @@ function buildRainChartHtml(dates, precip, highlight = null) {
         <text x="0" y="72" font-size="9" fill="var(--text-faint)">${firstLabel}</text>
         <text x="${width}" y="72" font-size="9" fill="var(--text-faint)" text-anchor="end">${lastLabel}</text>
       </svg>
+      ${sourceLine}
     </div>`;
 }
 
@@ -1846,14 +2041,14 @@ function popupDerived(data) {
   const elevation = typeof data.elevation === "number" ? Math.round(data.elevation) : null;
   // vegetazione reale (Corine Land Cover) interrogata dal vivo nel punto
   // esatto cliccato in onMapClick — non dalla cella meteo più vicina, che
-  // può distare 30-40km e restituire un tipo di bosco sbagliato
+  // può distare fino a ~20km e restituire un tipo di bosco sbagliato
   const vegClass = data.vegClass ?? null;
   const veg = vegetationInfo(vegClass, elevation);
 
   // Il popup interroga TUTTO sul punto esatto cliccato, non sulla cella
   // della griglia: pH da SoilGrids ed esposizione/pendenza calcolate da
   // quattro quote intorno al punto (vedi onMapClick). Sono i due dati che
-  // alla scala della griglia (55km) non avrebbero senso e che qui invece
+  // alla scala della griglia (33km) non avrebbero senso e che qui invece
   // sono precisi.
   const env = {
     dates,
@@ -1983,7 +2178,12 @@ function popupContent(lat, lon, data, openIdx = null) {
         ${tile(ICONS.ph, "pH suolo", phTileValue(data), " data-wx-ph")}
       </div>
 
-      ${buildRainChartHtml(dates, precip, highlight)}
+      ${buildRainChartHtml(dates, precip, highlight, {
+        source: data.rainSource || "modello",
+        count: data.rainGaugeCount || 0,
+        km: data.rainGaugeKm,
+        network: data.rainGaugeNetwork,
+      })}
 
       <div class="wx-forest-line" data-wx-forest>
         ${ICONS.forest}
@@ -3057,10 +3257,26 @@ function onMapClick(e) {
   // lenta: quasi sempre SoilGrids, cioè il dato MENO importante dei tre.
   // Adesso si disegna appena ci sono meteo e vegetazione, e il pH si
   // aggiunge quando arriva.
-  const weatherP = fetchWithTimeout(url, WEATHER_TIMEOUT_MS).then((r) => {
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
-  });
+  // La pioggia dei tre modelli viaggia su una richiesta separata: con
+  // "models=" nella richiesta principale Open-Meteo rinomina TUTTE le
+  // variabili per modello, e umidità, suolo e temperatura diventerebbero
+  // quattro serie ciascuna. Se questa fallisce il popup si apre lo stesso
+  // con il modello singolo, che è come si comportava prima.
+  const modelsUrl =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
+    `&daily=precipitation_sum&models=${RAIN_MODELS.join(",")}` +
+    `&past_days=16&forecast_days=1&timezone=auto`;
+  const modelsP = fetchWithTimeout(modelsUrl, WEATHER_TIMEOUT_MS)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+
+  const weatherP = Promise.all([
+    fetchWithTimeout(url, WEATHER_TIMEOUT_MS).then((r) => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }),
+    modelsP,
+  ]).then(([data, models]) => applyRainCorrection(data, models, lat, lng));
   // Corine e SoilGrids sono entrambi facoltativi: se uno non risponde il
   // popup resta utile con quel che c'è (il fattore corrispondente vale 1,
   // cioè neutro) invece di fallire in blocco. Meteo a parte, nessuno dei
@@ -3177,6 +3393,10 @@ Promise.all([
   fetch("data/soil_ph.json")
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null),
+  // i pluviometri servono solo al popup, che arriva dopo il primo disegno
+  // della mappa: si caricano insieme agli altri ma nessuno li aspetta, e
+  // se il file manca il popup ricade sui modelli
+  loadRainGauges(),
 ])
   .then(([occGeojson, weatherGeojson, vegFineGeojson, phJson]) => {
     occurrences = occGeojson.features;

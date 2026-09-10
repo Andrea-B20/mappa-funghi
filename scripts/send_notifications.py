@@ -42,6 +42,9 @@ from pathlib import Path
 
 import requests
 
+import rain_gauges
+from rain_gauges import apply_gauges, blend_model_precip, fetch_precip_models_batch
+
 ROOT = Path(__file__).resolve().parent.parent
 SCORER = ROOT / "scripts" / "score_cases.js"
 OCC_PATH = ROOT / "web" / "data" / "occurrences.geojson"
@@ -106,6 +109,38 @@ HOME_SAMPLE_RINGS = [
 ]
 
 TIER_RANK = {"none": 0, "soon": 1, "ready": 2}
+
+
+# Una notifica è la cosa peggiore su cui sbagliare pioggia: sveglia il
+# telefono di qualcuno per annunciare un temporale che non c'è stato. Qui
+# la pioggia passa dalle stesse due correzioni della mappa — media di
+# tre modelli e, dove esistono, pluviometri veri — invece che dal
+# singolo modello che dava il 12.8% di giorni piovosi a secco.
+_GAUGES = None
+
+
+def gauges():
+    global _GAUGES
+    if _GAUGES is None:
+        _GAUGES = rain_gauges.load_field()
+    return _GAUGES
+
+
+def corrected_precip(lat, lon, dates, daily):
+    """La pioggia giornaliera migliore disponibile per questo punto.
+
+    Se la richiesta multi-modello non riesce si resta sul modello singolo
+    del payload: una notifica in meno non vale il rischio di non mandarne
+    nessuna perché una richiesta accessoria è andata storta.
+    """
+    precip = daily.get("precipitation_sum") or []
+    try:
+        models = fetch_precip_models_batch([(lat, lon)], HISTORY_DAYS)[0]
+        if models["dates"] == dates:
+            precip = blend_model_precip(models["series"], len(dates))
+    except (requests.RequestException, IndexError, KeyError):
+        pass
+    return apply_gauges(lat, lon, dates, precip, gauges())[0]
 
 
 def fetch_subscribers():
@@ -246,6 +281,12 @@ def fetch_conditions(lat, lon):
     hourly = data.get("hourly") or {}
     hourly_temp = [v for v in hourly.get("temperature_2m", []) if v is not None]
     soil_temp = [v for v in hourly.get("soil_temperature_6cm", []) if v is not None]
+
+    # la pioggia corretta sostituisce quella grezza PRIMA di ogni lettura:
+    # i millimetri annunciati nella notifica e quelli su cui il modello
+    # decide le specie devono essere gli stessi numeri
+    precip = corrected_precip(lat, lon, dates, daily)
+    daily["precipitation_sum"] = [v if v is not None else 0.0 for v in precip]
 
     def series(key):
         return [v if v is not None else 0.0 for v in (daily.get(key) or [])][-HISTORY_DAYS:]
@@ -389,7 +430,7 @@ def nearest_habitat(lat, lon):
     """vegClass/elevation dalla cella precalcolata più vicina: quella fine
     (0.15°, solo dove esistono ritrovamenti storici — vedi
     scripts/fetch_vegetation_fine.py) se abbastanza vicina, altrimenti
-    quella nazionale (0.5°, copre tutta l'Italia ma più grossolana). Stessa
+    quella nazionale (0.2°, copre tutta l'Italia ma più grossolana). Stessa
     idea di zonesForCombinato in web/app.js, qui semplificata a un solo
     criterio di distanza perché i punti campionati intorno a una casa non
     cadono in una cella nota a priori come i ritrovamenti storici."""
@@ -446,12 +487,27 @@ def fetch_home_weather(points):
 
 def envs_for_home(points):
     payloads = fetch_home_weather(points)
+    # i tre modelli per TUTTI i punti in una richiesta sola, come il
+    # meteo qui sopra: chiederli punto per punto moltiplicherebbe per
+    # diciannove le richieste di ogni utente senza cambiare il risultato
+    try:
+        model_precip = fetch_precip_models_batch(points, HISTORY_DAYS)
+    except requests.RequestException:
+        model_precip = [None] * len(points)
+
     envs = []
-    for (lat, lon), payload in zip(points, payloads):
+    for (lat, lon), payload, models in zip(points, payloads, model_precip):
         daily = payload.get("daily", {})
         dates = daily.get("time", [])
         if not dates:
             continue
+
+        precip = daily.get("precipitation_sum") or []
+        if models and models["dates"] == dates:
+            precip = blend_model_precip(models["series"], len(dates))
+        daily["precipitation_sum"] = [
+            v if v is not None else 0.0 for v in apply_gauges(lat, lon, dates, precip, gauges())[0]
+        ]
 
         def series(key, daily=daily):
             return [v if v is not None else 0.0 for v in (daily.get(key) or [])][-HISTORY_DAYS:]

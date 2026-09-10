@@ -5,10 +5,13 @@ ritrovamenti storici — vedi FINE_GRID_STEP_DEG in web/app.js), calcolate
 solo per le celle che contengono almeno un ritrovamento storico reale
 (GBIF/iNaturalist).
 
-Perché serve, oltre a weather_grid.geojson: quella griglia è a 0.5°
+Perché serve, oltre a weather_grid.geojson: quella griglia era a 0.5°
 (~55km di passo), e per attribuire vegetazione/quota a un ritrovamento
 storico il frontend prendeva la cella meteo più vicina — che poteva distare
-fino a 30-40km. In montagna la vegetazione cambia bruscamente nel giro di
+fino a 30-40km. La griglia è poi passata a 0.2° (~22km, vedi LAT_STEP in
+fetch_weather_grid.py) e la distanza massima è scesa a ~11km, ma questa
+griglia fine resta più stretta e soprattutto centrata sui ritrovamenti
+veri, che è dove la precisione serve. In montagna la vegetazione cambia bruscamente nel giro di
 poche centinaia di metri, quindi quella distanza produceva attribuzioni
 sbagliate: un ritrovamento reale di fondovalle poteva ereditare "nessun
 bosco" dalla vetta alpina più vicina sulla griglia. Verificato: il 76% dei

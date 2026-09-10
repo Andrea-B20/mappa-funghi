@@ -51,6 +51,17 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
+      # Pioggia MISURATA dai pluviometri delle reti regionali. Va prima
+      # della griglia, che la legge per correggere il calcolo dei modelli
+      # (vedi scripts/rain_gauges.py). Ogni esecuzione aggiunge i giorni
+      # nuovi a quelli già in archivio, perché diverse reti pubblicano solo
+      # le ultime 72 ore mentre l'app ragiona su 16 giorni: è la ripetizione
+      # quotidiana a costruire la finestra intera.
+      # continue-on-error perché una rete regionale giù non deve fermare
+      # l'aggiornamento meteo: la griglia si rigenera comunque, con la
+      # pioggia dell'archivio del giorno prima e i modelli.
+      - run: python scripts/rain_gauges.py
+        continue-on-error: true
       - run: python scripts/fetch_weather_grid.py
       # pH del suolo: dato statico, quindi lo script è un no-op da pochi
       # secondi quando la cache è completa. Gira qui e non in un job a parte
@@ -65,9 +76,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/data/weather_grid.geojson web/data/soil_ph.json
+          # data/rain_gauges.json è l'archivio che si accumula (senza
+          # commit ripartirebbe da zero ogni notte e la finestra di pioggia
+          # misurata resterebbe di 3 giorni); data/terrain_cache.json evita
+          # di riscaricare quota e Corine per ~370 celle a ogni esecuzione
+          git add web/data/weather_grid.geojson web/data/soil_ph.json \
+                  web/data/rain_gauges.json data/rain_gauges.json data/terrain_cache.json
           git diff --cached --quiet && exit 0
-          git commit -m "Aggiorna dati meteo e suolo (automatico)"
+          git commit -m "Aggiorna dati meteo, pluviometri e suolo (automatico)"
           # il job storico può aver spinto nel frattempo: senza rebase il
           # push fallirebbe e l'aggiornamento del giorno andrebbe perso
           for i in 1 2 3; do

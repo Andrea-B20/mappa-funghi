@@ -1234,6 +1234,34 @@ main {
   white-space: nowrap;
 }
 
+/* provenienza della pioggia: "misurata da 3 pluviometri" e "stimata da 3
+   modelli" sono due gradi di fiducia diversi. Sta sotto il grafico, in
+   corpo minore: informa senza rubare la scena alle barre. Il pallino
+   colorato la rende leggibile in un colpo d'occhio: il colore della
+   pioggia quando è misurata, neutro quando è calcolata */
+.wx-rain-source {
+  display: flex;
+  /* su schermo stretto la riga va a capo: il pallino resta agganciato alla
+     PRIMA riga invece di galleggiare a metà fra le due */
+  align-items: flex-start;
+  gap: 5px;
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+.wx-rain-source::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-top: 4px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.wx-rain-source-pluviometri::before { background: var(--wet); }
+.wx-rain-source-misto::before { background: var(--wet); opacity: 0.55; }
+
 .wx-rain-chart { display: block; width: 100%; height: 62px; overflow: visible; }
 .wx-rain-hit { cursor: pointer; }
 .wx-rain-bar:hover path { opacity: 1 !important; }
