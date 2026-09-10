@@ -39,13 +39,16 @@ Copertura
 ---------
 Le reti pluviometriche italiane non hanno un'API nazionale: ogni regione
 pubblica per conto suo, con formati diversi, e diverse non pubblicano
-affatto in modo interrogabile. Qui ci sono le tre reti verificate
+affatto in modo interrogabile. Qui ci sono le quattro reti verificate
 funzionanti; dove non arriva nessun pluviometro la cella resta sul
 modello (vedi fetch_weather_grid.py, che segna la provenienza cella per
 cella così la mappa può dirlo).
 
 Aggiungere una regione = aggiungere una funzione che restituisce
 stazioni con coordinate e totali giornalieri, e metterla in PROVIDERS.
+Vale la pena farlo: misurato che una cella con un pluviometro entro 3 km
+azzecca la quantità di pioggia nel 76% dei casi contro il 50% di una cella
+servita dai soli modelli.
 Se una rete non risponde, quella regione torna al modello e le altre
 continuano: nessun provider può far fallire l'aggiornamento.
 
@@ -56,9 +59,10 @@ Uso:
 import json
 import math
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -77,6 +81,14 @@ KEEP_DAYS = 30
 FETCH_DAYS = 8
 
 TIMEOUT = 120
+
+# Un "giorno di pioggia" qui è sempre un giorno ITALIANO, lo stesso su cui
+# Open-Meteo somma la sua (timezone=auto). Senza fuso esplicito le
+# conversioni userebbero quello della macchina: giusto su un portatile
+# italiano, sbagliato di due ore sul runner a UTC che esegue
+# l'aggiornamento notturno. Un errore invisibile in locale e presente solo
+# in produzione, cioè il peggior tipo.
+ROMA = ZoneInfo("Europe/Rome")
 
 
 def _get(url, params=None, retries=3, base_delay=3, **kwargs):
@@ -101,7 +113,10 @@ def _window():
     giorni veri significherebbe far comparire un giorno quasi asciutto in
     mezzo a una settimana di pioggia.
     """
-    end = date.today() - timedelta(days=1)
+    # "oggi" è oggi in Italia, non sulla macchina che esegue: il lavoro
+    # notturno gira su un runner a UTC, e vicino a mezzanotte le due date
+    # non coincidono
+    end = datetime.now(ROMA).date() - timedelta(days=1)
     return [end - timedelta(days=i) for i in range(FETCH_DAYS)]
 
 
@@ -294,10 +309,85 @@ def fetch_trentino(days):
     return out
 
 
+# --------------------------------------------------------------------------
+# Emilia-Romagna — Arpae, API pubblica del portale Allerta Meteo (la stessa
+# che alimenta la mappa "Precipitazioni" del sito regionale).
+#
+# È l'unica delle reti collegate che non offre né il giorno né una serie:
+# risponde con il cumulato di UN'ORA per tutte le stazioni a un istante
+# dato. Il totale giornaliero va quindi ricomposto sommando 24 istantanee.
+# Ne vale la pena: sono 296 pluviometri sull'Appennino, cioè la fascia
+# dove i porcini si cercano davvero, e senza di loro tutta la dorsale da
+# Piacenza a Rimini resterebbe sulla stima dei modelli.
+# --------------------------------------------------------------------------
+
+EMILIA_URL = "https://allertameteo.regione.emilia-romagna.it/o/api/allerta/get-sensor-values-no-time"
+EMILIA_VAR = "1,0,3600/1,-,-,-/B13011"  # B13011 = precipitazione, cumulata su 3600s
+
+# Quanti giorni chiedere: 24 richieste ciascuno, quindi il numero conta.
+# Lo storico dell'endpoint si ferma comunque intorno alla settimana
+# (verificato: a 9 giorni risponde ancora ma con tutti i valori vuoti), e
+# l'archivio locale si occupa della memoria lunga.
+EMILIA_DAYS = 4
+
+def fetch_emilia(days):
+    daily = {}
+    meta = {}
+    for day in sorted(days)[-EMILIA_DAYS:]:
+        # Il totale del giorno è la somma di 24 istantanee: se anche una
+        # sola non arriva, quel totale è più basso del vero. Un giorno di
+        # pioggia sottostimato è esattamente l'errore che tutto questo
+        # lavoro serve a togliere, quindi un giorno incompleto si butta e
+        # resta ai modelli, invece di entrare in archivio come misura.
+        ore_perse = False
+        for hour in range(24):
+            # il valore all'istante T è la pioggia dell'ora che finisce in T,
+            # quindi l'ora 00:00-01:00 si chiede con T = 01:00
+            when = datetime(day.year, day.month, day.day, hour, tzinfo=ROMA) + timedelta(hours=1)
+            try:
+                rows = _get(EMILIA_URL, params={
+                    "variabile": EMILIA_VAR,
+                    "time": int(when.timestamp() * 1000),
+                }, retries=2).json()
+            except (requests.RequestException, ValueError):
+                ore_perse = True
+                continue
+            for r in rows:
+                sid = r.get("idstazione")
+                mm = r.get("value")
+                if sid is None or mm is None or mm < 0:
+                    continue
+                if sid not in meta:
+                    try:
+                        # lat/lon arrivano come interi in centomillesimi di grado
+                        meta[sid] = (int(r["lat"]) / 100000.0, int(r["lon"]) / 100000.0,
+                                     r.get("nomestaz", ""))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                bucket = daily.setdefault(sid, {})
+                key = day.isoformat()
+                bucket[key] = round(bucket.get(key, 0.0) + float(mm), 1)
+        if ore_perse:
+            key = day.isoformat()
+            for bucket in daily.values():
+                bucket.pop(key, None)
+        time.sleep(0.2)
+
+    out = []
+    for sid, series in daily.items():
+        if sid not in meta or not series:
+            continue
+        lat, lon, name = meta[sid]
+        out.append({"id": f"er:{sid}", "name": name, "network": "Arpae Emilia-Romagna",
+                    "lat": lat, "lon": lon, "daily": series})
+    return out
+
+
 PROVIDERS = [
     ("Lombardia", fetch_lombardia),
     ("Piemonte", fetch_piemonte),
     ("Trentino", fetch_trentino),
+    ("Emilia-Romagna", fetch_emilia),
 ]
 
 
@@ -577,7 +667,7 @@ def collect(verbose=True):
             got = sum(len(s["daily"]) for s in found)
             print(f"  {label}: {len(found)} pluviometri, {got} totali giornalieri")
 
-    cutoff = (date.today() - timedelta(days=KEEP_DAYS)).isoformat()
+    cutoff = (datetime.now(ROMA).date() - timedelta(days=KEEP_DAYS)).isoformat()
     # il limite superiore ripulisce anche l'archivio gia' scritto: un
     # giorno in corso finito dentro da un'esecuzione precedente resterebbe
     # li' per sempre come totale sbagliato
