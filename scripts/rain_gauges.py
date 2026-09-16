@@ -39,8 +39,9 @@ Copertura
 ---------
 Le reti pluviometriche italiane non hanno un'API nazionale: ogni regione
 pubblica per conto suo, con formati diversi, e diverse non pubblicano
-affatto in modo interrogabile. Qui ci sono le cinque reti verificate
-funzionanti; dove non arriva nessun pluviometro la cella resta sul
+affatto in modo interrogabile. Qui ci sono le dieci reti verificate
+funzionanti (in fondo ai provider l'elenco di quelle cercate e scartate,
+con il motivo); dove non arriva nessun pluviometro la cella resta sul
 modello (vedi fetch_weather_grid.py, che segna la provenienza cella per
 cella così la mappa può dirlo).
 
@@ -56,10 +57,17 @@ Uso:
     .venv/bin/python scripts/rain_gauges.py     # aggiorna l'archivio
 """
 
+import csv
+import html
+import io
 import json
 import math
+import re
 import time
-from datetime import datetime, timedelta
+import unicodedata
+import uuid
+import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
@@ -310,43 +318,68 @@ def fetch_trentino(days):
 
 
 # --------------------------------------------------------------------------
-# Emilia-Romagna — Arpae, API pubblica del portale Allerta Meteo (la stessa
-# che alimenta la mappa "Precipitazioni" del sito regionale).
+# Emilia-Romagna e Umbria — portale "Allerta Meteo", la stessa piattaforma
+# in entrambe le regioni, con la stessa API pubblica che alimenta la mappa
+# "Precipitazioni" dei due siti.
 #
-# È l'unica delle reti collegate che non offre né il giorno né una serie:
-# risponde con il cumulato di UN'ORA per tutte le stazioni a un istante
-# dato. Il totale giornaliero va quindi ricomposto sommando 24 istantanee.
-# Ne vale la pena: sono 296 pluviometri sull'Appennino, cioè la fascia
-# dove i porcini si cercano davvero, e senza di loro tutta la dorsale da
-# Piacenza a Rimini resterebbe sulla stima dei modelli.
+# Non offre né il giorno né una serie: risponde con il cumulato di UN'ORA
+# per tutte le stazioni a un istante dato. Il totale giornaliero va quindi
+# ricomposto sommando 24 istantanee.
+# Ne vale la pena: 296 pluviometri sull'Appennino emiliano e altri 92 in
+# Umbria, cioè la fascia dove i porcini si cercano davvero.
+#
+# Gran parte delle stazioni registra ogni 15 minuti (Emilia) o 30 (Umbria),
+# e alla domanda oraria risponde etichettando il dato con il proprio passo.
+# Sembrerebbe un quarto d'ora spacciato per un'ora, ma non lo è: il valore
+# è già il totale dell'ora. Verificato sommando le 96 istantanee da 15
+# minuti di un giorno di pioggia su 283 stazioni emiliane (814 mm contro
+# 815 delle 24 orarie) e, in Umbria, ritrovando nell'ora 12-13 gli 0.2 mm
+# che la stazione aveva registrato alle 12:30.
 # --------------------------------------------------------------------------
 
-EMILIA_URL = "https://allertameteo.regione.emilia-romagna.it/o/api/allerta/get-sensor-values-no-time"
-EMILIA_VAR = "1,0,3600/1,-,-,-/B13011"  # B13011 = precipitazione, cumulata su 3600s
+ALLERTA_PATH = "/o/api/allerta/get-sensor-values-no-time"
+ALLERTA_VAR = "1,0,3600/1,-,-,-/B13011"  # B13011 = precipitazione, cumulata su 3600s
+
+EMILIA_URL = "https://allertameteo.regione.emilia-romagna.it" + ALLERTA_PATH
+UMBRIA_URL = "https://cfumbria.regione.umbria.it" + ALLERTA_PATH
 
 # Quanti giorni chiedere: 24 richieste ciascuno, quindi il numero conta.
 # Lo storico dell'endpoint si ferma comunque intorno alla settimana
-# (verificato: a 9 giorni risponde ancora ma con tutti i valori vuoti), e
-# l'archivio locale si occupa della memoria lunga.
-EMILIA_DAYS = 4
+# (verificato: a 9 giorni risponde ancora ma con tutti i valori vuoti; in
+# Umbria i valori spariscono già a 7), e l'archivio locale si occupa della
+# memoria lunga.
+ALLERTA_DAYS = 4
+
 
 def fetch_emilia(days):
+    return _fetch_allerta(EMILIA_URL, "er", "Arpae Emilia-Romagna", days)
+
+
+def fetch_umbria(days):
+    return _fetch_allerta(UMBRIA_URL, "umb", "Centro Funzionale Umbria", days)
+
+
+def _fetch_allerta(url, prefix, network, days):
     daily = {}
     meta = {}
-    for day in sorted(days)[-EMILIA_DAYS:]:
+    for day in sorted(days)[-ALLERTA_DAYS:]:
         # Il totale del giorno è la somma di 24 istantanee: se anche una
         # sola non arriva, quel totale è più basso del vero. Un giorno di
         # pioggia sottostimato è esattamente l'errore che tutto questo
         # lavoro serve a togliere, quindi un giorno incompleto si butta e
         # resta ai modelli, invece di entrare in archivio come misura.
+        # Stessa regola per la singola stazione: una che a qualche ora
+        # risponde senza valore ha un totale parziale, e si scarta solo lei.
+        key = day.isoformat()
         ore_perse = False
+        ore = {}
         for hour in range(24):
             # il valore all'istante T è la pioggia dell'ora che finisce in T,
             # quindi l'ora 00:00-01:00 si chiede con T = 01:00
             when = datetime(day.year, day.month, day.day, hour, tzinfo=ROMA) + timedelta(hours=1)
             try:
-                rows = _get(EMILIA_URL, params={
-                    "variabile": EMILIA_VAR,
+                rows = _get(url, params={
+                    "variabile": ALLERTA_VAR,
                     "time": int(when.timestamp() * 1000),
                 }, retries=2).json()
             except (requests.RequestException, ValueError):
@@ -365,11 +398,10 @@ def fetch_emilia(days):
                     except (KeyError, TypeError, ValueError):
                         continue
                 bucket = daily.setdefault(sid, {})
-                key = day.isoformat()
                 bucket[key] = round(bucket.get(key, 0.0) + float(mm), 1)
-        if ore_perse:
-            key = day.isoformat()
-            for bucket in daily.values():
+                ore[sid] = ore.get(sid, 0) + 1
+        for sid, bucket in daily.items():
+            if ore_perse or ore.get(sid) != 24:
                 bucket.pop(key, None)
         time.sleep(0.2)
 
@@ -378,7 +410,7 @@ def fetch_emilia(days):
         if sid not in meta or not series:
             continue
         lat, lon, name = meta[sid]
-        out.append({"id": f"er:{sid}", "name": name, "network": "Arpae Emilia-Romagna",
+        out.append({"id": f"{prefix}:{sid}", "name": name, "network": network,
                     "lat": lat, "lon": lon, "daily": series})
     return out
 
@@ -483,12 +515,339 @@ def fetch_campania(days):
     return out
 
 
+# --------------------------------------------------------------------------
+# Lazio — Centro Funzionale Regionale, piattaforma AEGIS.
+#
+# 229 pluviometri: la rete regionale più quelli di ACEA, del Genio Civile
+# e dell'Ufficio Idrografico, tutti sulla stessa mappa pubblica. La mappa
+# entra con un account anonimo che la pagina di accesso dichiara in chiaro
+# e usa per chiunque la apra; qui si fa lo stesso, rileggendolo ogni volta
+# dalla pagina invece di copiarlo nel codice, così se cambia si segue.
+#
+# Il dato utile è "Pioggia Cumulata": il server la restituisce minuto per
+# minuto come contatore che parte da zero all'inizio del periodo chiesto.
+# Il totale di un giorno è quindi la differenza fra il contatore alla
+# mezzanotte di fine e quello alla mezzanotte di inizio. A differenza di
+# una somma di letture, un contatore non perde pioggia se nel mezzo manca
+# qualche minuto: basta che le due mezzanotti ci siano.
+# --------------------------------------------------------------------------
+
+LAZIO_ROOT = "https://temporeale.regione.lazio.it"
+LAZIO_ELEMENT = "Pioggia Cumulata"
+
+# Circa 120 KB a stazione per quattro giorni: si chiede la stessa finestra
+# delle reti orarie, e l'archivio tiene il resto
+LAZIO_DAYS = 4
+
+# quanto lontano dalla mezzanotte può stare la lettura usata come confine
+# del giorno. Il passo è di un minuto: mezz'ora di tolleranza copre un
+# buco di trasmissione senza spostare pioggia vera da un giorno all'altro
+LAZIO_BOUNDARY_MIN = 30
+
+
+def fetch_lazio(days):
+    page = _get(f"{LAZIO_ROOT}/aegis/access/login", params={"checkAnonymous": "True"}).text
+    found = re.search(r'LoginA\(\s*"[^"]*",\s*"([^"]*)",\s*"([^"]*)",\s*"([^"]*)"', page)
+    if not found:
+        raise ValueError("pagina di accesso AEGIS cambiata, account pubblico non trovato")
+    api, user, password = found.groups()
+    api = LAZIO_ROOT + api
+
+    token = requests.post(f"{api}/connect/token", timeout=TIMEOUT, data={
+        "username": user, "password": password, "grant_type": "password",
+        "client_id": "Aegis", "client_instance": str(uuid.uuid4()),
+    })
+    token.raise_for_status()
+    headers = {"Authorization": "Bearer " + token.json()["access_token"]}
+
+    places = {p["i"]: p for p in _get(f"{api}/v3/locations", params={"category": "All"},
+                                      headers=headers).json()}
+    elements = _get(f"{api}/v3/elements", headers=headers, params=[
+        ("category", "1"), ("ui_culture", "it"),
+        ("field", "ElementName"), ("field", "StationName"),
+    ]).json()
+    gauges = [e for e in elements
+              if e.get("elementName") == LAZIO_ELEMENT and e.get("stationId") in places]
+
+    chosen = sorted(days)[-LAZIO_DAYS:]
+    bounds = [datetime(d.year, d.month, d.day, tzinfo=ROMA) for d in chosen]
+    bounds.append(bounds[-1] + timedelta(days=1))
+    tolerance = LAZIO_BOUNDARY_MIN * 60 * 1000
+
+    out = []
+    for element in gauges:
+        try:
+            series = _get(f"{api}/v3/data-combo/{element['elementId']}", headers=headers,
+                          retries=2, base_delay=1, timeout=30, params=[
+                              ("from", (bounds[0] - timedelta(minutes=LAZIO_BOUNDARY_MIN)).isoformat()),
+                              ("to", (bounds[-1] + timedelta(minutes=LAZIO_BOUNDARY_MIN)).isoformat()),
+                              ("basicType", "Plausible"), ("part", "EpochTime"), ("part", "Value"),
+                              ("ui_culture", "it"),
+                          ]).json().get("plausibleData") or []
+        except (requests.RequestException, ValueError):
+            continue
+        points = [(int(t), float(v)) for t, v in series if t is not None and v is not None]
+        if not points:
+            continue
+
+        def counter_at(moment):
+            target = int(moment.timestamp() * 1000)
+            nearest = min(points, key=lambda p: abs(p[0] - target))
+            return nearest[1] if abs(nearest[0] - target) <= tolerance else None
+
+        marks = [counter_at(b) for b in bounds]
+        per_day = {}
+        for day, start, end in zip(chosen, marks, marks[1:]):
+            # un contatore che scende non è pioggia negativa ma un dato rotto
+            if start is None or end is None or end < start:
+                continue
+            per_day[day.isoformat()] = round(end - start, 1)
+        if not per_day:
+            continue
+        place = places[element["stationId"]]
+        out.append({"id": f"laz:{element['elementId']}", "name": place.get("n", ""),
+                    "network": "Centro Funzionale Lazio",
+                    "lat": float(place["y"]), "lon": float(place["x"]), "daily": per_day})
+        time.sleep(0.1)
+    return out
+
+
+# --------------------------------------------------------------------------
+# Basilicata — Centro Funzionale Decentrato.
+#
+# 95 pluviometri. La pagina pubblica dei dati in tempo reale porta con sé
+# sia le coordinate delle stazioni sia il numero del sensore "Pioggia 24
+# ore", e il modulo pubblico di scaricamento dati restituisce la serie di
+# quel sensore per una settimana in una richiesta.
+#
+# Il sensore è una cumulata mobile sulle 24 ore, aggiornata ogni 15
+# minuti: letto a mezzanotte è il totale del giorno appena finito.
+# Verificato su un giorno di pioggia contro la somma delle 24 letture del
+# sensore orario della stessa stazione: 33.4 mm in entrambi i casi.
+# --------------------------------------------------------------------------
+
+BASILICATA_BASE = "https://centrofunzionale.regione.basilicata.it/it"
+
+
+def fetch_basilicata(days):
+    page = _get(f"{BASILICATA_BASE}/sensoriTempoReale.php", params={"st": "P", "defer": "1"}).text
+    coords = {
+        sid: (float(lat), float(lon), html.unescape(name))
+        for sid, name, lat, lon in re.findall(
+            r"addStationMarker\((\d+),'<strong class=\"station_name\">(.*?)</strong>',"
+            r"([\d.\-]+),([\d.\-]+)\)", page)
+    }
+    sensors = dict(re.findall(
+        r'stazione\.php\?id=(\d+)"[^>]*>[^<]*</a></td>\s*<td>[^<]*</td><td>Pioggia 24 ore</td>'
+        r'.*?sensNum=(\d+)&t=1', page))
+
+    wanted = {d.isoformat() for d in days}
+    today = datetime.now(ROMA).date()
+    out = []
+    for sid, sens in sensors.items():
+        if sid not in coords:
+            continue
+        try:
+            text = _get(f"{BASILICATA_BASE}/scaricaDati.php", retries=2, base_delay=1, timeout=30,
+                        params={"action": "download", "id": sid, "sensNum": sens,
+                                "exmethod": "Observations", "startDate": today.isoformat(),
+                                "interval": "7"}).content.decode("utf-8-sig", errors="ignore")
+        except requests.RequestException:
+            continue
+        per_day = {}
+        for line in text.splitlines():
+            parts = line.split(";")
+            if len(parts) < 2 or not parts[0].endswith(" 00:00:00"):
+                continue
+            try:
+                stamp = datetime.strptime(parts[0], "%d/%m/%Y %H:%M:%S")
+                mm = float(parts[1].strip('"').replace(",", "."))
+            except ValueError:
+                continue
+            # la lettura della mezzanotte chiude il giorno PRIMA
+            day = (stamp.date() - timedelta(days=1)).isoformat()
+            if day in wanted and mm >= 0:
+                per_day[day] = round(mm, 1)
+        if not per_day:
+            continue
+        lat, lon, name = coords[sid]
+        out.append({"id": f"bas:{sid}", "name": name, "network": "Centro Funzionale Basilicata",
+                    "lat": lat, "lon": lon, "daily": per_day})
+        time.sleep(0.2)
+    return out
+
+
+# --------------------------------------------------------------------------
+# Sicilia — SIAS, Servizio Informativo Agrometeorologico Siciliano.
+#
+# 96 stazioni, dati in licenza CC0. Il SIAS pubblica una pagina statica con
+# la pioggia giornaliera di tutte le stazioni negli ultimi dieci giorni;
+# le coordinate stanno nell'elenco sensori del portale open data regionale.
+#
+# I giorni del SIAS sono giorni UTC (lo dichiara la pagina), quindi
+# spostati di una o due ore rispetto al giorno italiano delle altre reti.
+# Su un totale giornaliero è uno scarto piccolo, e non c'è una fonte
+# siciliana con il giorno locale.
+# --------------------------------------------------------------------------
+
+SICILIA_TABLE = "http://www.sias.regione.sicilia.it/NHEOWL0530_00.html"
+SICILIA_STATIONS = ("https://dati.regione.sicilia.it/download/dataset/elenco-sensori-meteo/"
+                    "filesystem/elenco-sensori-meteo_csv_rsd.zip")
+_MESI = {"Gen": 1, "Feb": 2, "Mar": 3, "Apr": 4, "Mag": 5, "Giu": 6,
+         "Lug": 7, "Ago": 8, "Set": 9, "Ott": 10, "Nov": 11, "Dic": 12}
+
+
+def _plain(name):
+    """Nome confrontabile fra la tabella SIAS e l'elenco open data, che
+    scrivono le stesse stazioni con maiuscole, accenti e spazi diversi."""
+    ascii_name = unicodedata.normalize("NFKD", name.lower()).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]", "", ascii_name)
+
+
+def fetch_sicilia(days):
+    archive = zipfile.ZipFile(io.BytesIO(_get(SICILIA_STATIONS).content))
+    listing = archive.read(archive.namelist()[0]).decode("utf-8", errors="ignore")
+    coords = {}
+    for row in csv.DictReader(io.StringIO(listing), delimiter=";"):
+        try:
+            coords[_plain(row["DESC_STAZ"])] = (float(row["Y_LAT"]), float(row["X_LON"]),
+                                                row["DESC_STAZ"], row["ID_STAZ"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    page = _get(SICILIA_TABLE).content.decode("latin-1")
+    wanted = {d.isoformat() for d in days}
+    columns = None
+    out = {}
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", page, re.S):
+        # i tag diventano spazi: le date sono scritte "15<br>Set<br>2026"
+        cells = [re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+                 for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)]
+        if not cells:
+            continue
+        if cells[0] == "Stazioni":
+            # l'intestazione si ripete a ogni provincia: le date si rileggono
+            columns = {}
+            for i, cell in enumerate(cells):
+                parts = cell.split()
+                if len(parts) == 3 and parts[1] in _MESI:
+                    columns[i] = datetime(int(parts[2]), _MESI[parts[1]], int(parts[0])).date().isoformat()
+            continue
+        if not columns or _plain(cells[0]) not in coords:
+            continue
+        lat, lon, name, sid = coords[_plain(cells[0])]
+        per_day = {}
+        for i, day in columns.items():
+            if i >= len(cells) or day not in wanted:
+                continue
+            try:
+                mm = float(cells[i])  # "--" = dato non ancora disponibile
+            except ValueError:
+                continue
+            if mm >= 0:
+                per_day[day] = round(mm, 1)
+        if per_day:
+            out[sid] = {"id": f"sic:{sid}", "name": name, "network": "SIAS Sicilia",
+                        "lat": lat, "lon": lon, "daily": per_day}
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------
+# Sardegna — ARPAS, Dipartimento Idrometeoclimatico.
+#
+# 306 stazioni. ARPAS pubblica gli ultimi sette giorni come servizio ArcGIS
+# pubblico (è quello che alimenta la sua dashboard "Dati meteo Sardegna"):
+# una riga per stazione, con data e pioggia di ciascuno dei sette giorni,
+# più un secondo servizio con l'anagrafica e le coordinate. Due richieste
+# in tutto. Controllato contro la tabella giornaliera pubblicata sul sito
+# ARPAS per le stazioni presenti in entrambe: stessi valori.
+#
+# Il servizio si aggiorna verso le 9 del mattino: l'esecuzione notturna
+# trova quindi fino all'altroieri, e ieri arriva con quella successiva.
+# --------------------------------------------------------------------------
+
+SARDEGNA_BASE = "https://services6.arcgis.com/VdOe78ROZ6pyB2c8/arcgis/rest/services"
+
+
+def _arcgis_rows(layer, fields):
+    rows = []
+    while True:
+        page = _get(f"{SARDEGNA_BASE}/{layer}/FeatureServer/0/query", params={
+            "where": "1=1", "outFields": fields, "returnGeometry": "false",
+            "resultOffset": len(rows), "f": "json",
+        }).json()
+        if "error" in page:
+            raise ValueError(page["error"])
+        rows.extend(f["attributes"] for f in page.get("features", []))
+        if not page.get("exceededTransferLimit"):
+            return rows
+
+
+def fetch_sardegna(days):
+    coords = {}
+    for row in _arcgis_rows("Anagrafica_Stazioni_ARPAS", "COD_STAZ,NOME,WGS84_LAT,WGS84_LON,PLUVIO"):
+        if row.get("PLUVIO") != "SI" or row.get("WGS84_LAT") is None or row.get("WGS84_LON") is None:
+            continue
+        coords[row["COD_STAZ"]] = (float(row["WGS84_LAT"]), float(row["WGS84_LON"]), row.get("NOME", ""))
+
+    slots = range(1, 8)
+    fields = ",".join(["Cod_Staz"] + [f"day{i},pcg{i}" for i in slots])
+    wanted = {d.isoformat() for d in days}
+    out = []
+    for row in _arcgis_rows("Letture_centraline_vista", fields):
+        code = row.get("Cod_Staz")
+        if code not in coords:
+            continue
+        per_day = {}
+        for i in slots:
+            stamp, mm = row.get(f"day{i}"), row.get(f"pcg{i}")
+            if stamp is None or mm is None or mm < 0:
+                continue
+            # la data arriva come mezzanotte UTC in millisecondi
+            day = datetime.fromtimestamp(stamp / 1000, timezone.utc).date().isoformat()
+            if day in wanted:
+                per_day[day] = round(float(mm), 1)
+        if per_day:
+            lat, lon, name = coords[code]
+            out.append({"id": f"sar:{code}", "name": name, "network": "ARPAS Sardegna",
+                        "lat": lat, "lon": lon, "daily": per_day})
+    return out
+
+
+# --------------------------------------------------------------------------
+# Regioni cercate e NON collegate (settembre 2026), perché una prossima
+# ricerca non riparta da zero:
+#
+#   - Marche: la Rete MIR ha un'API pubblica, ma i termini d'uso vietano
+#     l'accesso "con modalità diverse da quelle messe a disposizione" e
+#     obbligano le applicazioni di terzi a far accettare i termini ai
+#     propri utenti. Serve un accordo con la Protezione Civile regionale.
+#   - Abruzzo: il portale POLARIS dà i dati solo dopo accesso con SPID.
+#   - Puglia: il server della Protezione Civile tronca le risposte (lo fa
+#     anche con la sua stessa pagina) e l'archivio giornaliero è fermo a
+#     giugno.
+#   - Calabria: il server dei dati in tempo reale non risponde.
+#   - Molise: nessun dato pubblicato.
+#   - Lazio, rete agrometeo ARSIAL: gli open data arrivano con circa due
+#     settimane di ritardo e le condizioni d'uso vietano l'estrazione
+#     automatica. Il Lazio è comunque coperto dal Centro Funzionale.
+#   - Reti amatoriali (es. Meteo Regione Lazio, 395 stazioni): pubblicano
+#     solo il totale di oggi in corso, e l'associazione vende i propri dati
+#     storici. Usarli richiede il loro consenso.
+# --------------------------------------------------------------------------
+
+
 PROVIDERS = [
     ("Lombardia", fetch_lombardia),
     ("Piemonte", fetch_piemonte),
     ("Trentino", fetch_trentino),
     ("Emilia-Romagna", fetch_emilia),
+    ("Umbria", fetch_umbria),
+    ("Lazio", fetch_lazio),
     ("Campania", fetch_campania),
+    ("Basilicata", fetch_basilicata),
+    ("Sicilia", fetch_sicilia),
+    ("Sardegna", fetch_sardegna),
 ]
 
 
@@ -777,7 +1136,7 @@ def collect(verbose=True):
         st["daily"] = {d: mm for d, mm in st["daily"].items() if cutoff <= d <= latest}
     # una stazione dismessa smette di ricevere giorni: quando l'ultimo esce
     # dalla finestra sparisce da sola, senza bisogno di manutenzione
-    stations = {k: v for k, v in stations.items() if v["daily"]}
+    stations = _one_per_place({k: v for k, v in stations.items() if v["daily"]})
 
     if verbose:
         total = sum(len(s["daily"]) for s in stations.values())
@@ -785,6 +1144,33 @@ def collect(verbose=True):
         print(f"\nArchivio: {len(stations)} pluviometri, {total} totali giornalieri "
               f"({delta:+d} rispetto a prima)")
     return stations
+
+
+# Due voci a meno di 100 m sono lo stesso punto misurato due volte: una
+# stazione di confine che compare sia nella rete della sua regione sia in
+# quella del vicino (Sora, Avigliano, Muro Lucano...), o una stazione
+# campana con due sensori di pioggia. Lasciarle entrambe darebbe a quel
+# punto due dei tre posti dell'interpolazione, cioè peso doppio.
+DUPLICATE_KM = 0.1
+
+
+def _one_per_place(stations):
+    """Tiene una sola voce per punto: quella con più giorni in archivio,
+    così la scelta resta la stessa da un'esecuzione all'altra."""
+    kept = {}
+    cells = {}
+    for key in sorted(stations, key=lambda k: (-len(stations[k]["daily"]), k)):
+        st = stations[key]
+        # celle da un centesimo di grado (~1 km), in interi: servono solo a
+        # non confrontare ogni stazione con tutte le altre
+        cell = (round(st["lat"] * 100), round(st["lon"] * 100))
+        near = [kept[other] for dlat in (-1, 0, 1) for dlon in (-1, 0, 1)
+                for other in cells.get((cell[0] + dlat, cell[1] + dlon), [])]
+        if any(_km(st["lat"], st["lon"], o["lat"], o["lon"]) < DUPLICATE_KM for o in near):
+            continue
+        kept[key] = st
+        cells.setdefault(cell, []).append(key)
+    return kept
 
 
 def save(stations):
