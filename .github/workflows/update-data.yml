@@ -129,7 +129,11 @@ jobs:
       # un evento del giorno, non ha bisogno di memoria). NON in web/data:
       # quella cartella è pubblicata su GitHub Pages e qui dentro finiscono
       # identificativi di iscrizione.
+      # !cancelled(): lo script esce con errore se un invio fallisce (per
+      # rendere il job rosso), ma lo stato degli altri iscritti va salvato
+      # lo stesso, altrimenti domani riceverebbero di nuovo la stessa notifica
       - name: Salva stato notifiche "vicino a casa"
+        if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

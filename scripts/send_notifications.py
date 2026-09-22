@@ -143,6 +143,43 @@ def corrected_precip(lat, lon, dates, daily):
     return apply_gauges(lat, lon, dates, precip, gauges())[0]
 
 
+def open_meteo_get(params, timeout):
+    """Open-Meteo alle 5 UTC va spesso in timeout (nei log di settembre
+    capitava quasi un giorno su due, sempre sulle stesse zone): senza
+    riprovare, la zona veniva scartata in silenzio e la pioggia di quel
+    giorno non generava nessuna notifica. Tre tentativi distanziati."""
+    return rain_gauges._get(FORECAST_URL, params=params, retries=3, base_delay=15, timeout=timeout).json()
+
+
+def post_notification(subscription_ids, heading, content):
+    """Invio unico per zone e casa.
+
+    OneSignal rifiuta con 400 una notifica senza testo in inglese ("en" è
+    obbligatorio anche quando si mandano altre lingue): con solo "it" ogni
+    invio da settembre è fallito, e nessuno se n'è accorto perché l'errore
+    finiva nel log di un job comunque verde. Stesso testo italiano sotto
+    "en": gli utenti sono italiani, "en" è solo il fallback richiesto
+    dall'API. Il corpo della risposta va nel messaggio d'errore, altrimenti
+    un 400 resta indecifrabile."""
+    headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
+    body = {
+        "app_id": ONESIGNAL_APP_ID,
+        "include_subscription_ids": subscription_ids,
+        "headings": {"en": heading, "it": heading},
+        "contents": {"en": content, "it": content},
+        "url": "https://andrea-b20.github.io/mappa-funghi/",
+    }
+    resp = requests.post(NOTIFICATIONS_URL, headers=headers, json=body, timeout=30)
+    if not resp.ok:
+        raise RuntimeError(f"OneSignal {resp.status_code}: {resp.text[:500]}")
+    # 200 non basta: se nessun destinatario è valido (iscrizione scaduta)
+    # OneSignal risponde 200 con "errors" e non consegna nulla
+    data = resp.json()
+    if data.get("errors") and not data.get("id"):
+        raise RuntimeError(f"OneSignal non ha accettato la notifica: {data['errors']}")
+    return data
+
+
 def fetch_subscribers():
     """Ritorna [{subscription_ids, zones, home}] per ogni iscritto che ha
     almeno una zona (tag notify_zones) o una casa (tag notify_home)."""
@@ -267,9 +304,7 @@ def fetch_conditions(lat, lon):
         "forecast_days": 1,
         "timezone": "auto",
     }
-    resp = requests.get(FORECAST_URL, params=params, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
+    data = open_meteo_get(params, timeout=45)
     daily = data.get("daily", {})
     dates = daily.get("time", [])
     precip = daily.get("precipitation_sum", [])
@@ -352,7 +387,6 @@ def species_note(best_row):
 
 
 def send_push_rain(subscription_ids, rained_zones):
-    headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
     if len(rained_zones) == 1:
         z = rained_zones[0]
         temp_txt = f", {round(z['temp_c'])}°C" if z["temp_c"] is not None else ""
@@ -363,15 +397,7 @@ def send_push_rain(subscription_ids, rained_zones):
         best = max((z.get("best") for z in rained_zones if z.get("best")), key=lambda r: r["scoreNew"], default=None)
         heading = f"Ha piovuto in {len(rained_zones)} delle tue zone"
         content = f"Fino a {max_mm:.0f}mm caduti ieri.{species_note(best)} Controlla le condizioni sulla mappa."
-    body = {
-        "app_id": ONESIGNAL_APP_ID,
-        "include_subscription_ids": subscription_ids,
-        "headings": {"it": heading},
-        "contents": {"it": content},
-        "url": "https://andrea-b20.github.io/mappa-funghi/",
-    }
-    resp = requests.post(NOTIFICATIONS_URL, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
+    post_notification(subscription_ids, heading, content)
 
 
 # ---------------------------------------------------------------------
@@ -479,9 +505,7 @@ def fetch_home_weather(points):
         "forecast_days": 1,
         "timezone": "auto",
     }
-    resp = requests.get(FORECAST_URL, params=params, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
+    data = open_meteo_get(params, timeout=90)
     return data if isinstance(data, list) else [data]
 
 
@@ -581,19 +605,12 @@ def send_push_home(subscription_ids, radius_km, escalations):
         parts.append(f"{names} in arrivo")
     content = "; ".join(parts)
     content = content[0].upper() + content[1:] + f", entro {radius_km:.0f}km da casa. Controlla la mappa."
-    headers = {"Authorization": f"Key {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
-    body = {
-        "app_id": ONESIGNAL_APP_ID,
-        "include_subscription_ids": subscription_ids,
-        "headings": {"it": "Funghi vicino a casa"},
-        "contents": {"it": content},
-        "url": "https://andrea-b20.github.io/mappa-funghi/",
-    }
-    resp = requests.post(NOTIFICATIONS_URL, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
+    post_notification(subscription_ids, "Funghi vicino a casa", content)
 
 
 def process_zones(subscribers, occ_features):
+    """Ritorna il numero di invii falliti."""
+    failures = 0
     total = sum(len(s["zones"]) for s in subscribers)
     print(f"{sum(1 for s in subscribers if s['zones'])} iscritti con zone, {total} zone totali da controllare")
     for sub in subscribers:
@@ -607,6 +624,7 @@ def process_zones(subscribers, occ_features):
             if conditions and conditions["mm"] and conditions["mm"] >= MIN_MM_TO_NOTIFY:
                 rained.append({**zone, **conditions, "conditions": conditions})
             time.sleep(0.1)
+        print(f"zone piovose (>= {MIN_MM_TO_NOTIFY:.0f}mm) per un iscritto: {len(rained)} su {len(sub['zones'])}")
         if not rained:
             continue
 
@@ -617,14 +635,18 @@ def process_zones(subscribers, occ_features):
             send_push_rain(sub["subscription_ids"], rained)
             print(f"notifica zona inviata: {len(rained)} zone piovose su {len(sub['zones'])}")
         except Exception as exc:
+            failures += 1
             print(f"errore invio push zona: {exc}", file=sys.stderr)
+    return failures
 
 
 def process_homes(subscribers, occ_features):
+    """Ritorna il numero di invii falliti."""
     homes = [s for s in subscribers if s.get("home")]
     print(f"{len(homes)} iscritti con casa+raggio impostati")
     if not homes:
-        return
+        return 0
+    failures = 0
 
     state = load_home_state()
     today = date.today().isoformat()
@@ -657,19 +679,30 @@ def process_homes(subscribers, occ_features):
             if TIER_RANK[tier] > TIER_RANK[prev_tier]:
                 escalations.append({"species": species, "tier": tier})
             next_state[species] = {"tier": tier, "date": today}
-        state[sub_id] = next_state
-        changed = True
 
         if escalations:
             try:
                 send_push_home(sub["subscription_ids"], home["radiusKm"], escalations)
                 print(f"notifica casa inviata a {sub_id}: {escalations}")
             except Exception as exc:
+                failures += 1
                 print(f"errore invio push casa: {exc}", file=sys.stderr)
+                # la salita non è stata comunicata: si tiene il livello
+                # precedente, così domani è ancora una salita e si riprova
+                # (prima lo stato registrava il nuovo livello anche a invio
+                # fallito, e la notifica era persa per sempre)
+                for e in escalations:
+                    if e["species"] in prev:
+                        next_state[e["species"]] = prev[e["species"]]
+                    else:
+                        next_state.pop(e["species"], None)
+        state[sub_id] = next_state
+        changed = True
         time.sleep(0.1)
 
     if changed:
         save_home_state(state)
+    return failures
 
 
 def main():
@@ -680,8 +713,15 @@ def main():
     print(f"{len(subscribers)} iscritti totali (zone e/o casa)")
     occ_features = load_occurrences()
 
-    process_zones(subscribers, occ_features)
-    process_homes(subscribers, occ_features)
+    failures = process_zones(subscribers, occ_features)
+    failures += process_homes(subscribers, occ_features)
+    # un invio fallito deve rendere rosso il job: finché era solo una riga
+    # nel log, le notifiche sono rimaste rotte per settimane senza che se ne
+    # accorgesse nessuno (lo stato "vicino a casa" viene salvato comunque,
+    # vedi "if: always()" nel workflow)
+    if failures:
+        print(f"{failures} notifiche non inviate", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
